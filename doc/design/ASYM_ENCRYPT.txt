@@ -1,13 +1,13 @@
 
-Changing ASYM_ENCRYPT from pull to push model
-=============================================
+Changing the key exchange in ASYM_ENCRYPT from pull to push model
+=================================================================
 
 Author: Bela Ban
-Date: Jan 2019
+Date:   Jan 2019
 
 
 Problem
--------
+=======
 
 ASYM_ENCRYPT has a shared group key (SGK) which is used by all group members to encrypt / decrypt messages.
 
@@ -17,15 +17,15 @@ installed in all members.
 
 The transfer of the SGK from the coordinator to members is called _key exchange_. This can be done in 2 ways:
 
-1. The coordinator encrypts the SGK with the public key of a member, and the member decrypts it with its private key.
+1. The coordinator encrypts the SGK with the public key of a member, which decrypts it with its private key.
    However, this is prone to man-in-the-middle attacks.
-2. Via a (certificate-based) SSL connection between member and coordinator. This is currently done via an additional
-   protocol (e.g. SSL_KEY_EXCHANGE).
+2. Via an SSL connection between member and coordinator. This is currently done via an additional protocol
+   (e.g. SSL_KEY_EXCHANGE).
 
 In both cases, a *pull mechanism* is used: the client notices (or is told) that the SGK is no longer valid, and *pulls*
 it from the coordinator. Until the new SGK is installed, all messages will be discarded.
 
-This can lead to problems, e.g. the following scenario:
+This can lead to problems, e.g. in the following scenario:
 * Coordinator A installs a new view V=A,B,C,D (E left)
 * V is encrypted with the new SGK that the coordinator just created
 * Members B, C and D now fetch the new SGK from the coordinator
@@ -36,7 +36,7 @@ This can lead to problems, e.g. the following scenario:
 
 
 Solution
---------
+========
 
 Instead of using a *pull* approach for key exchange, a *push* approach should be used: the transfer of the SGK needs to
 be initiated by the *coordinator* rather than the joiners (on JOIN) or other members (on VIEW / MERGE-VIEW).
@@ -45,3 +45,77 @@ Ideally, the SGK is sent *with* the JOIN-RSP or VIEW message, and installed by t
 decrypted. This eliminates the delays in view installation associated with the pull approach. It may also simplify the
 code.
 
+The design below describes both external (SSL_KEY_EXCHANGE) and internal (SGK encrypted by recipient's public key)
+approaches to key exchange.
+
+
+
+
+Design
+======
+- Members are {A,B,C,D}; A is the coordinator
+- use_external_key_exchange: EX
+- pub-map: map of addresses and their associated public keys
+
+
+A: new member E joining the group
+=================================
+
+E sends a JOIN-REQ to A
+-----------------------
+- If EX == false:
+    - ASYM_ENCRYPT adds a header with E's public key to the JOIN-REQ sent to A
+
+A receives the JOIN-REQ from E
+------------------------------
+- If the header contains the public key of E:
+    - Add E and its public key to pub-map
+    - Multicast a PUB-KEY message
+
+
+A sends the JOIN-RSP to E
+-------------------------
+- If EX == false:
+    - ASYM_ENCRYPT gets E's public key from pub-map, encrypts the SGK with it, and adds the
+      encrypted SGK to the JOIN-RSP
+- Else
+    - ASYM_ENCRYPT sends a GET-SHARED-KEY message (before the JOIN-RSP) to E
+
+
+E receives the GET-SHARED-KEY message from A
+--------------------------------------------
+- E asks its KEY_EXCHANGE protocol to fetch the SGK
+- E *blocks* until the SGK has been retrieved and installed. This prevents the delivery of the JOIN-RSP,
+  as the latter was sent after the GET-SHARED-KEY message. This means that the JOIN-RSP will have a valid
+  SGK in place to decrypt it.
+
+
+E receives the JOIN-RSP from A
+------------------------------
+- If EX == false:
+    - Get the encrypted SGK from the JOIN-RSP
+    - Install the SGK
+    - Pass the JOIN-RSP up (this will install the view)
+- Else:
+    - The SGK has already been installed as part of the prior key exchange run
+
+
+On reception of PUB-KEY:
+------------------------
+- Add the mapping between member and public key to pub-map
+
+
+On view change
+--------------
+- Remove all mappings from pub-map whose members are not in the view
+
+
+On a merge-view:
+----------------
+- TBD: multicast all mappings in pub-map?
+
+
+
+
+B: member(s) leaving the group and change_key_on_leave enabled
+==============================================================
