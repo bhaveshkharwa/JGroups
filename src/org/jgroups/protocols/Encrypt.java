@@ -202,20 +202,20 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
         if(secret == null)
             return;
 
-        BlockingQueue<Cipher> encoding_ciphers=new ArrayBlockingQueue<>(cipher_pool_size);
-        BlockingQueue<Cipher> decoding_ciphers=new ArrayBlockingQueue<>(cipher_pool_size);
+        BlockingQueue<Cipher> tmp_encoding_ciphers=new ArrayBlockingQueue<>(cipher_pool_size);
+        BlockingQueue<Cipher> tmp_decoding_ciphers=new ArrayBlockingQueue<>(cipher_pool_size);
         for(int i=0; i < cipher_pool_size; i++ ) {
-            encoding_ciphers.offer(createCipher(Cipher.ENCRYPT_MODE, secret, algorithm));
-            decoding_ciphers.offer(createCipher(Cipher.DECRYPT_MODE, secret, algorithm));
+            tmp_encoding_ciphers.offer(createCipher(Cipher.ENCRYPT_MODE, secret, algorithm));
+            tmp_decoding_ciphers.offer(createCipher(Cipher.DECRYPT_MODE, secret, algorithm));
         }
 
         // set the version
         MessageDigest digest=MessageDigest.getInstance("MD5");
-        byte[] sym_version=digest.digest(secret.getEncoded());
+        byte[] tmp_sym_version=digest.digest(secret.getEncoded());
 
-        this.encoding_ciphers = encoding_ciphers;
-        this.decoding_ciphers = decoding_ciphers;
-        this.sym_version = sym_version;
+        this.encoding_ciphers = tmp_encoding_ciphers;
+        this.decoding_ciphers = tmp_decoding_ciphers;
+        this.sym_version = tmp_sym_version;
     }
 
 

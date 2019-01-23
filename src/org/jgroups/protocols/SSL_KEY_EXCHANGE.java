@@ -339,8 +339,8 @@ public class SSL_KEY_EXCHANGE extends KeyExchange {
             catch(Throwable t) {
             }
         }
-        throw new IllegalStateException(String.format("failed connecting to %s (port range [%d - %d])",
-                                                      dest.getIpAddress(), port, port+port_range));
+        throw new IllegalStateException(String.format("%s: failed connecting to %s (port range [%d - %d])",
+                                                      local_addr, dest.getIpAddress(), port, port+port_range));
     }
 
 

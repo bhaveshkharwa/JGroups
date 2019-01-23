@@ -5,6 +5,7 @@ import org.jgroups.JChannel;
 import org.jgroups.protocols.pbcast.GMS;
 import org.jgroups.protocols.pbcast.NAKACK2;
 import org.jgroups.protocols.pbcast.STABLE;
+import org.jgroups.stack.Protocol;
 import org.jgroups.util.Util;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
@@ -24,8 +25,10 @@ public class ASYM_ENCRYPT_LeaveTest {
     protected static final String      KEYSTORE="my-keystore.jks";
     protected static final String      KEYSTORE_PWD="password";
     protected static final int         NUM=10;
-    protected static final int         NUM_LEAVERS=2;
+    protected static final int         NUM_LEAVERS=1;
     protected static final InetAddress LOOPBACK;
+
+    protected JChannel[] channels=new JChannel[NUM];
 
     static {
         try {
@@ -38,22 +41,14 @@ public class ASYM_ENCRYPT_LeaveTest {
 
 
 
-
-    protected JChannel[] channels=new JChannel[NUM];
-
-    @BeforeMethod
-    protected void setup() throws Exception {
-        for(int i=0; i < channels.length; i++) {
+    @BeforeMethod protected void setup() throws Exception {
+        for(int i=0; i < channels.length; i++)
             channels[i]=create(String.valueOf(i+1)).connect(ASYM_ENCRYPT_LeaveTest.class.getSimpleName());
-            Util.sleep(i == 0? 2000 : 1000);
-        }
-        Util.waitUntilAllChannelsHaveSameView(10000, 1000, channels);
+        Util.waitUntilAllChannelsHaveSameView(20000, 1000, channels);
     }
 
-    @AfterMethod
-    protected void destroy() {
-        for(int i=channels.length-NUM_LEAVERS; i >= 0; i--)
-            channels[i].close();
+    @AfterMethod protected void destroy() {
+        Util.closeReverse(channels);
     }
 
 
@@ -65,7 +60,11 @@ public class ASYM_ENCRYPT_LeaveTest {
         JChannel[] remaining_channels=new JChannel[channels.length-NUM_LEAVERS];
         System.arraycopy(channels, NUM_LEAVERS, remaining_channels, 0, channels.length-NUM_LEAVERS);
 
+
+        Stream.of(channels).map(c -> c.getProtocolStack().findProtocol(GMS.class)).forEach(p -> ((Protocol)p).setLevel("trace"));
+
         Stream.of(channels).limit(NUM_LEAVERS).forEach(Util::close);
+
         Util.waitUntilAllChannelsHaveSameView(30000, 1000, remaining_channels);
         for(int i=0; i < remaining_channels.length; i++)
             System.out.printf("%-4s: view is %s\n", remaining_channels[i].getAddress(), remaining_channels[i].getView());
@@ -80,10 +79,10 @@ public class ASYM_ENCRYPT_LeaveTest {
           new TCP().setBindAddress(LOOPBACK), // .setBindPort(BIND_PORT),
           new MPING(), // new TCPPING().portRange(10).initialHosts(Collections.singleton(new InetSocketAddress(LOOPBACK, BIND_PORT))),
           // omit MERGE3 from the stack -- nodes are leaving gracefully
-          //new MERGE3().setMinInterval(2000).setMaxInterval(5000),
-          new FD_SOCK(),
-          new FD_ALL(),
-          new VERIFY_SUSPECT(),
+          // new MERGE3().setMinInterval(2000).setMaxInterval(5000),
+          // new FD_SOCK(),
+          // new FD_ALL(),
+          // new VERIFY_SUSPECT(),
           new SSL_KEY_EXCHANGE().setKeystoreName(KEYSTORE).setKeystorePassword(KEYSTORE_PWD).setPortRange(10),
           new ASYM_ENCRYPT().setUseExternalKeyExchange(true).setChangeKeyOnLeave(true)
             .symKeylength(128).symAlgorithm("AES").asymKeylength(512).asymAlgorithm("RSA"),

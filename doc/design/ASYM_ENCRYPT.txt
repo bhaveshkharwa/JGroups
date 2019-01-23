@@ -1,0 +1,47 @@
+
+Changing ASYM_ENCRYPT from pull to push model
+=============================================
+
+Author: Bela Ban
+Date: Jan 2019
+
+
+Problem
+-------
+
+ASYM_ENCRYPT has a shared group key (SGK) which is used by all group members to encrypt / decrypt messages.
+
+The SGK is created by the coordinator and transferred to new members when they join. Also, if members leave and
+change_key_on_leave is true (default), then the shared key needs to be changed by the coordinator and also be
+installed in all members.
+
+The transfer of the SGK from the coordinator to members is called _key exchange_. This can be done in 2 ways:
+
+1. The coordinator encrypts the SGK with the public key of a member, and the member decrypts it with its private key.
+   However, this is prone to man-in-the-middle attacks.
+2. Via a (certificate-based) SSL connection between member and coordinator. This is currently done via an additional
+   protocol (e.g. SSL_KEY_EXCHANGE).
+
+In both cases, a *pull mechanism* is used: the client notices (or is told) that the SGK is no longer valid, and *pulls*
+it from the coordinator. Until the new SGK is installed, all messages will be discarded.
+
+This can lead to problems, e.g. the following scenario:
+* Coordinator A installs a new view V=A,B,C,D (E left)
+* V is encrypted with the new SGK that the coordinator just created
+* Members B, C and D now fetch the new SGK from the coordinator
+* V is received by B, C and D: those members who have the new SGK will be able to decrypt and deliver V, the others
+  will discard it.
+==> Unless the coordinator sends a new multicast message, V will not get delivered by some members (until STABLE kicks
+    in and retransmits V), leading to a plethora of issues.
+
+
+Solution
+--------
+
+Instead of using a *pull* approach for key exchange, a *push* approach should be used: the transfer of the SGK needs to
+be initiated by the *coordinator* rather than the joiners (on JOIN) or other members (on VIEW / MERGE-VIEW).
+
+Ideally, the SGK is sent *with* the JOIN-RSP or VIEW message, and installed by the recipients _before_ the new view is
+decrypted. This eliminates the delays in view installation associated with the pull approach. It may also simplify the
+code.
+
