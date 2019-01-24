@@ -326,7 +326,7 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
     protected void encryptAndSend(Message msg) throws Exception {
         EncryptHeader hdr=new EncryptHeader(EncryptHeader.ENCRYPT, symVersion());
 
-        // copy neeeded because same message (object) may be retransmitted -> prevent double encryption
+        // copy needed because same message (object) may be retransmitted -> prevent double encryption
         Message msgEncrypted=msg.copy(false).putHeader(this.id, hdr);
         if(msg.getLength() > 0)
             msgEncrypted.setBuffer(code(msg.getRawBuffer(),msg.getOffset(),msg.getLength(),false));
