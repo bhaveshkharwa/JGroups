@@ -53,12 +53,12 @@ approaches to key exchange.
 
 Design
 ======
-- Members are {A,B,C,D}; A is the coordinator
+- View is V1={A,B,C,D}; A is the coordinator
 - use_external_key_exchange: EX
 - pub-map: map of addresses and their associated public keys
 
 
-A: new member E joining the group
+1: New member E joining the group
 =================================
 
 E sends a JOIN-REQ to A
@@ -117,5 +117,67 @@ On a merge-view:
 
 
 
-B: member(s) leaving the group and change_key_on_leave enabled
-==============================================================
+2: Member D leaves the group and change_key_on_leave enabled
+============================================================
+
+***************************************************************************
+*** Note that if change_key_on_leave is false, nothing needs to be done ***
+***************************************************************************
+
+
+A multicasts view V2={A,B,C}
+----------------------------
+- If EX:
+    - ASYM_ENCRYPT multicasts a GET-SHARED-KEY message to all members (minus itself)
+- Else
+    - ASYM_ENCRYPT creates a map of members (B and C), grabs their public keys from pub-map, and adds the SGK
+      encrypted with the respective member's public key.
+    - An INSTALL-SECRET-KEY message with the above map as payload is multicast to all members (B and C)
+- The VIEW message is multicast to B and C
+
+
+B and C receive the GET-SHARED-KEY message from A
+-------------------------------------------------
+- Both members ask its KEY_EXCHANGE protocol to fetch the SGK
+- This *blocks* until the SGK has been retrieved and installed. This prevents the delivery of the succeeding VIEW message,
+  as the latter was sent after the GET-SHARED-KEY message. This means that the VIEW message will have a valid
+  SGK in place to decrypt it.
+
+
+B and C receive an INSTALL-SECRET-KEY message from A
+----------------------------------------------------
+- Each member reads the map from the payload and gets the encrypted SGK associated with itself from the map
+- The encrypted SGK is then decrypted with the member's private key, and the resulting SGK is installed
+
+
+Members B and C receive V2
+--------------------------
+- Nothing needs to be done, as the SGK for the new view has already been installed
+
+
+
+3. Cluster merge
+================
+- Clusters are V5={A,B,C} and V5={D,E,F}
+
+
+New coord D multicasts MergeView V6={D,E,C,B,A,F}
+-------------------------------------------------
+- If EX:
+    - ASYM_ENCRYPT on D multicasts a GET-SHARED-KEY message to all members (minus itself) [same as for regular views]
+- Else
+    - D multicasts a SEND-PUB-KEY message to all members
+    - Wait until we have the public keys of all members of V6
+    - Create a map of all members, grab their public keys from pub-map, and add the SGK encrypted with the respective
+      member's public key.
+    - An INSTALL-SECRET-KEY message with the above map as payload is multicast to all members of V6
+- The MERGE-VIEW message is multicast to all members
+
+
+On reception of a SEND-PUB-KEY message from D
+---------------------------------------------
+- Send a PUB-KEY message (including the member's public key) back to D
+
+
+
+
