@@ -164,14 +164,14 @@ Members B and C receive V2
 New coord D multicasts MergeView V6={D,E,C,B,A,F}
 -------------------------------------------------
 - If EX:
-    - ASYM_ENCRYPT on D multicasts a GET-SHARED-KEY message to all members (minus itself) [same as for regular views]
+    - ASYM_ENCRYPT on new coordinator D sends (unicast) GET-SHARED-KEY messages to each of E,C,B,A,F (see [1])
 - Else
-    - D multicasts a SEND-PUB-KEY message to all members
+    - D sends (unicast) SEND-PUB-KEY messages to each of E,C,B,A,F (see [1])
     - Wait until we have the public keys of all members of V6
     - Create a map of all members, grab their public keys from pub-map, and add the SGK encrypted with the respective
       member's public key.
-    - An INSTALL-SECRET-KEY message with the above map as payload is multicast to all members of V6
-- The MERGE-VIEW message is multicast to all members
+    - A (unicast) INSTALL-SECRET-KEY message with the above map as payload is sent to each of E,C,B,A,F (see [1])
+- The MERGE-VIEW message is multicast to all members in the current subgroup {D,E,F}
 
 
 On reception of a SEND-PUB-KEY message from D
@@ -179,5 +179,17 @@ On reception of a SEND-PUB-KEY message from D
 - Send a PUB-KEY message (including the member's public key) back to D
 
 
+
+Misc
+====
+
+[1] Why can't we use a multicast when merging?
+----------------------------------------------
+- When subgroup coordinators A and D multicast V6 in their respective subgroups, installation of V6 might occur at
+  different wall clock times, e.g. V6 might get installed at T5 in {D,E,F}, but at T100 in {A,B,C}.
+- If D multicast GET_SHARED_KEY at T50, then subgroup {A,B,C} would reject the message, because at T50, D was not (yet)
+  a member of that subgroup. Unless FLUSH was configured, MergeViews are installed asynchronously in subgroups.
+- Therefore *unicast messages* to all members are used to make sure the GET-SHARED-KEY messages are received by all
+  members of a MergeView: unicast messages can be delivered to members outside the current view.
 
 

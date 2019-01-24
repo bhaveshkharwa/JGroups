@@ -168,7 +168,7 @@ public class GMS extends Protocol implements DiagnosticsHandler.ProbeHandler {
     //[JGRP-700] - FLUSH: flushing should span merge
     protected final AckCollector        merge_ack_collector=new AckCollector();
 
-    protected boolean                   flushProtocolInStack=false;
+    protected boolean                   flushProtocolInStack;
 
     // Has this coord sent its first view since becoming coord ? Used to send a full- or delta- view */
     protected boolean                   first_view_sent;
