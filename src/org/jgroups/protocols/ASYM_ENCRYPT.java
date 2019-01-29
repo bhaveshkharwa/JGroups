@@ -58,6 +58,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
       "start the key exchange protocol. When all members have acked, the task is cancelled.")
     protected long                                 key_server_interval=1000;
 
+    protected volatile View                        prev_view;
     protected volatile Address                     key_server_addr;
     protected KeyPair                              key_pair;     // to store own's public/private Key
     protected Cipher                               asym_cipher;  // decrypting cypher for secret key requests
@@ -194,10 +195,6 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                         log.warn("%s: unable to send message down: %s", local_addr, e);
                         return null;
                     }
-                case GMS.GmsHeader.VIEW:
-                    // multicast an INSTALL_SHARED_KEY message to all members (delivered before the view message)
-                    sendSharedGroupKeys(null);
-                    break;
             }
         }
         if(skip(hdr) || bypass(msg, false))
@@ -490,8 +487,8 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
             Buffer serialized_keys=serializeKeys(encrypted_shared_keys);
             if(serialized_keys == null)
                 return;
-            log.trace("%s: sending %d encrypted shared group keys to %s",
-                      local_addr, pub_map.size(), dest == null? "all members" : dest);
+            log.trace("%s: sending %d encrypted shared group key(s) to %s (version: %s)",
+                      local_addr, pub_map.size(), dest == null? "all members" : dest, Util.byteArrayToHexString(sym_version));
             Message msg=new Message(dest, serialized_keys).setTransientFlag(Message.TransientFlag.DONT_LOOPBACK)
               .putHeader(id, new EncryptHeader(EncryptHeader.INSTALL_SHARED_KEY, symVersion()));
             down_prot.down(msg);
@@ -634,6 +631,9 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                           })
                           .start(getTransport().getTimer(), 0, key_server_interval);
                     }
+                    // multicast an INSTALL_SHARED_KEY message to all members (delivered before the view message)
+                    if(left_mbrs)
+                        sendSharedGroupKeys(null);
                 }
                 return;
             }

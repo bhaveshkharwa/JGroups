@@ -131,9 +131,10 @@ A multicasts view V2={A,B,C}
 - If EX:
     - ASYM_ENCRYPT multicasts a FETCH-SHARED-KEY message to all members (minus itself)
 - Else
-    - ASYM_ENCRYPT creates a map of members (B and C), grabs their public keys from pub-map, and adds the SGK
-      encrypted with the respective member's public key.
-    - An INSTALL-SHARED-KEY message with the above map as payload is multicast to all members (B and C)
+    - If members left:
+        - ASYM_ENCRYPT creates a map of members (B and C), grabs their public keys from pub-map, and adds the SGK
+          encrypted with the respective member's public key.
+        - An INSTALL-SHARED-KEY message with the above map as payload is multicast to all members (B and C)
 - The VIEW message is multicast to B and C
 
 
