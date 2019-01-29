@@ -9,18 +9,12 @@ import org.jgroups.conf.ClassConfigurator;
 import org.jgroups.protocols.pbcast.GMS;
 import org.jgroups.util.*;
 
-import javax.crypto.BadPaddingException;
-import javax.crypto.Cipher;
-import javax.crypto.IllegalBlockSizeException;
-import javax.crypto.KeyGenerator;
-import javax.crypto.SecretKey;
+import javax.crypto.*;
 import javax.crypto.spec.SecretKeySpec;
 import java.security.*;
 import java.security.spec.X509EncodedKeySpec;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiPredicate;
 
 /**
@@ -77,6 +71,10 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
 
     protected ResponseCollectorTask<Boolean>       key_requesters;
 
+    // map of members and their public keys
+    protected final Map<Address,byte[]>            pub_map=new ConcurrentHashMap<>();
+
+
 
     @Override
     public void setKeyStoreEntry(KeyStore.PrivateKeyEntry entry) {
@@ -92,10 +90,10 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
     public long         getKeyserverInterval()               {return key_server_interval;}
     public ASYM_ENCRYPT setKeyserverInterval(long i)         {key_server_interval=i; return this;}
 
-    public KeyPair      keyPair()                  {return key_pair;}
-    public Cipher       asymCipher()               {return asym_cipher;}
-    public Address      keyServerAddr()            {return key_server_addr;}
-    public ASYM_ENCRYPT keyServerAddr(Address ks)  {this.key_server_addr=ks; return this;}
+    public KeyPair      keyPair()                            {return key_pair;}
+    public Cipher       asymCipher()                         {return asym_cipher;}
+    public Address      keyServerAddr()                      {return key_server_addr;}
+    public ASYM_ENCRYPT keyServerAddr(Address ks)            {this.key_server_addr=ks; return this;}
 
     public List<Integer> providedDownServices() {
         return Arrays.asList(Event.GET_SECRET_KEY, Event.SET_SECRET_KEY);
@@ -118,6 +116,10 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         return this;
     }
 
+    @ManagedAttribute(description="Keys in the public key map")
+    public String getPublicKeys() {
+        return pub_map.keySet().toString();
+    }
 
     @ManagedAttribute(description="The current key server")
     public String getKeyServerAddress() {return key_server_addr != null? key_server_addr.toString() : "null";}
@@ -152,8 +154,52 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         super.stop();
     }
 
+    public void start() throws Exception {
+        super.start();
+        pub_map.put(local_addr, key_pair.getPublic().getEncoded());
+    }
+
     public Object down(Message msg) {
         GMS.GmsHeader hdr=msg.getHeader(GMS_ID);
+        if(hdr != null && !use_external_key_exchange) {
+            switch(hdr.getType()) {
+                case GMS.GmsHeader.JOIN_REQ:
+                case GMS.GmsHeader.JOIN_REQ_WITH_STATE_TRANSFER: // attach our public key to the JOIN-REQ
+                    EncryptHeader h=new EncryptHeader(EncryptHeader.PUB_KEY, symVersion())
+                      .key(key_pair.getPublic().getEncoded());
+                    msg.putHeader(this.id, h);
+                    return down_prot.down(msg);
+                case GMS.GmsHeader.JOIN_RSP:
+                    // add the shared group key, encrypted with the destination's public key (should be in pub_map)
+                    byte[] pk=pub_map.get(msg.getDest());
+                    if(pk == null) {
+                        log.error("%s: public key (to encrypted shared group key) for %s not found in pub-map",
+                                  local_addr, msg.dest());
+                        break;
+                    }
+                    try {
+                        Message encrypted_msg=encrypt(msg);
+                        byte[] encryptedKey=encryptSecretKey(secret_key, makePublicKey(pk));
+                        EncryptHeader eh=encrypted_msg.getHeader(id);
+                        eh.key(encryptedKey);
+                        log.debug("%s: sending secret key response to %s (version: %s)",
+                                  local_addr, encrypted_msg.getDest(), Util.byteArrayToHexString(sym_version));
+                        down_prot.down(encrypted_msg);
+
+                        // send a PUB_KEY message to the joiner
+                        sendPublicKeys(msg.getDest());
+                        return null;
+                    }
+                    catch(Exception e) {
+                        log.warn("%s: unable to send message down: %s", local_addr, e);
+                        return null;
+                    }
+                case GMS.GmsHeader.VIEW:
+                    // multicast an INSTALL_SHARED_KEY message to all members (delivered before the view message)
+                    sendSharedGroupKeys(null);
+                    break;
+            }
+        }
         if(skip(hdr) || bypass(msg, false))
             return down_prot.down(msg);
         return super.down(msg);
@@ -184,6 +230,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         if(hdr == null)
             return super.up(msg);
 
+        checkForPubKeyOrPrivateKey(msg, hdr);
         if(skip(hdr))
             return up_prot.up(msg);
 
@@ -204,6 +251,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
 
             GMS.GmsHeader hdr=msg.getHeader(GMS_ID);
             if(hdr != null) {
+                checkForPubKeyOrPrivateKey(msg, hdr);
                 if(skip(hdr)) {
                     try {
                         up_prot.up(msg);
@@ -230,6 +278,26 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
             super.up(batch); // decrypt the rest of the messages in the batch (if any)
     }
 
+    /** Checks if the message contains a public key (and adds it to pub_map if present) or an encrypted group key
+     * (and installs it if present) */
+    protected void checkForPubKeyOrPrivateKey(Message msg, GMS.GmsHeader hdr) {
+        EncryptHeader h=msg.getHeader(this.id);
+        if(h == null || h.key() == null)
+            return;
+        switch(hdr.getType()) {
+            case GMS.GmsHeader.JOIN_REQ:
+            case GMS.GmsHeader.JOIN_REQ_WITH_STATE_TRANSFER: // get the public key from the JOIN-REQ
+                pub_map.put(msg.src(), h.key());
+                sendPublicKeys(null); // multicast PUB_KEY message to other members (*exclude self*!)
+                break;
+            case GMS.GmsHeader.JOIN_RSP:
+                handleSecretKeyResponse(msg.getSrc(), h.version(), h.key());
+                break;
+            case GMS.GmsHeader.VIEW:
+                handleSharedGroupKeyResponse(msg.getSrc(), h.version(), msg.getRawBuffer(), msg.getOffset(), msg.getLength());
+                break;
+        }
+    }
 
 
     /** Checks if a message needs to be encrypted/decrypted, or whether it can bypass encryption */
@@ -294,6 +362,12 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                 if(key_requesters != null)
                     key_requesters.add(msg.src(), true);
                 break;
+            case EncryptHeader.PUB_KEY:
+                installPublicKeys(msg.getSrc(), msg.getRawBuffer(), msg.getOffset(), msg.getLength());
+                break;
+            case EncryptHeader.INSTALL_SHARED_KEY:
+                handleSharedGroupKeyResponse(msg.getSrc(), hdr.version(), msg.getRawBuffer(), msg.getOffset(), msg.getLength());
+                break;
         }
         return null;
     }
@@ -320,7 +394,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
             return;
         log.debug("%s: received secret key request from %s", local_addr, msg.getSrc());
         try {
-            PublicKey tmpKey=generatePubKey(msg.getBuffer());
+            PublicKey tmpKey=makePublicKey(msg.getBuffer());
             sendSecretKey(secret_key, tmpKey, msg.getSrc());
         }
         catch(Exception e) {
@@ -348,6 +422,142 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         catch(Exception e) {
             log.warn("%s: unable to process key received from %s: %s", local_addr, msg.src(), e);
         }
+    }
+
+    protected void handleSecretKeyResponse(Address sender, byte[] key_version, byte[] encrypted_key) {
+        if(!inView(sender, "ignoring secret key sent by %s which is not in current view %s"))
+            return;
+
+        if(Arrays.equals(sym_version, key_version)) {
+            log.debug("%s: secret key (version %s) already installed, ignoring key response from %s",
+                      local_addr, Util.byteArrayToHexString(key_version), sender);
+            return;
+        }
+        try {
+            SecretKey tmp=decodeKey(encrypted_key);
+            if(tmp != null)
+                setKeys(sender, tmp, key_version); // otherwise set the received key as the shared key
+        }
+        catch(Exception e) {
+            log.warn("%s: unable to process key received from %s: %s", local_addr, sender, e);
+        }
+    }
+
+    protected void installPublicKeys(Address sender, byte[] buf, int offset, int length) {
+        ByteArrayDataInputStream in=new ByteArrayDataInputStream(buf, offset, length);
+        try {
+            int num_keys=in.readInt();
+            for(int i=0; i < num_keys; i++) {
+                Address mbr=Util.readAddress(in);
+                int len=in.readInt();
+                byte[] key=new byte[len];
+                in.readFully(key, 0, key.length);
+                pub_map.put(mbr, key);
+            }
+            log.trace("%s: added %d public keys to local cache", local_addr, num_keys);
+        }
+        catch(Exception ex) {
+            log.error("%s: failed reading public keys received from %s: %s", local_addr, sender, ex);
+        }
+    }
+
+    protected void sendPublicKeys(Address dest) {
+        try {
+            Buffer serialized_keys=serializeKeys(pub_map);
+            if(serialized_keys == null)
+                return;
+            log.trace("%s: sending %d public keys to %s", local_addr, pub_map.size(), dest == null? "all members" : dest);
+            Message msg=new Message(dest, serialized_keys).setTransientFlag(Message.TransientFlag.DONT_LOOPBACK)
+              .putHeader(id, new EncryptHeader(EncryptHeader.PUB_KEY, symVersion()));
+            down_prot.down(msg);
+        }
+        catch(Exception ex) {
+            log.error("%s: failed writing pub-key map to message: %s", local_addr, ex);
+        }
+    }
+
+    /** Encrypt the shared group key with the public key of each member and send the encrypted keys as body of a msg */
+    protected void sendSharedGroupKeys(Address dest) {
+        try {
+            Map<Address,byte[]> encrypted_shared_keys=new HashMap<>(pub_map.size());
+            for(Map.Entry<Address,byte[]> e: pub_map.entrySet()) {
+                Address mbr=e.getKey();
+                byte[] encoded_pk=e.getValue();
+                PublicKey pk=makePublicKey(encoded_pk);
+                byte[] encrypted_shared_key=encryptSecretKey(secret_key, pk);
+                encrypted_shared_keys.put(mbr, encrypted_shared_key);
+            }
+            Buffer serialized_keys=serializeKeys(encrypted_shared_keys);
+            if(serialized_keys == null)
+                return;
+            log.trace("%s: sending %d encrypted shared group keys to %s",
+                      local_addr, pub_map.size(), dest == null? "all members" : dest);
+            Message msg=new Message(dest, serialized_keys).setTransientFlag(Message.TransientFlag.DONT_LOOPBACK)
+              .putHeader(id, new EncryptHeader(EncryptHeader.INSTALL_SHARED_KEY, symVersion()));
+            down_prot.down(msg);
+        }
+        catch(Exception ex) {
+            log.error("%s: failed writing shared group keys to message: %s", local_addr, ex);
+        }
+    }
+
+    protected void handleSharedGroupKeyResponse(Address sender, byte[] version, byte[] buf, int offset, int length) {
+        if(!inView(sender, "ignoring shared group key sent by %s which is not in current view %s"))
+            return;
+
+        if(Arrays.equals(sym_version, version)) {
+            log.debug("%s: secret key (version %s) already installed, ignoring key response from %s",
+                      local_addr, Util.byteArrayToHexString(version), sender);
+            return;
+        }
+        Map<Address,byte[]> shared_keys=unserializeKeys(sender, buf, offset, length);
+        byte[] encrypted_key=shared_keys != null? shared_keys.get(local_addr) : null;
+        if(encrypted_key == null) {
+            log.warn("%s: found no encrypted shared group key for me in map, cannot install new secret key", local_addr);
+            return;
+        }
+        try {
+            SecretKey tmp=decodeKey(encrypted_key);
+            if(tmp != null)
+                setKeys(sender, tmp, version); // otherwise set the received key as the shared key
+        }
+        catch(Exception e) {
+            log.warn("%s: unable to process key received from %s: %s", local_addr, sender, e);
+        }
+    }
+
+    protected static Buffer serializeKeys(Map<Address,byte[]> keys) throws Exception {
+        int num_keys=keys.size();
+        if(num_keys == 0)
+            return null;
+        ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(num_keys * 100);
+        out.writeInt(num_keys);
+        for(Map.Entry<Address,byte[]> e: keys.entrySet()) {
+            Util.writeAddress(e.getKey(), out);
+            byte[] val=e.getValue();
+            out.writeInt(val.length);
+            out.write(val, 0, val.length);
+        }
+        return out.getBuffer();
+    }
+
+    protected Map<Address,byte[]> unserializeKeys(Address sender, byte[] buf, int offset, int length) {
+        Map<Address,byte[]> map=new HashMap<>();
+        ByteArrayDataInputStream in=new ByteArrayDataInputStream(buf, offset, length);
+        try {
+            int num_keys=in.readInt();
+            for(int i=0; i < num_keys; i++) {
+                Address mbr=Util.readAddress(in);
+                int len=in.readInt();
+                byte[] key=new byte[len];
+                in.readFully(key, 0, key.length);
+                map.put(mbr, key);
+            }
+        }
+        catch(Exception ex) {
+            log.error("%s: failed reading keys received from %s: %s", local_addr, sender, ex);
+        }
+        return map;
     }
 
 
@@ -392,6 +602,8 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
     @Override protected void handleView(View v) {
         boolean left_mbrs, create_new_key;
         Address old_key_server;
+
+        pub_map.keySet().retainAll(v.getMembers());
 
         synchronized(this) {
             left_mbrs=change_key_on_leave && this.view != null && !v.containsMembers(this.view.getMembersRaw());
@@ -527,7 +739,8 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         synchronized(this) {
             try {
                 keyBytes=asym_cipher.doFinal(encodedKey);
-            } catch (BadPaddingException | IllegalBlockSizeException e) {
+            }
+            catch (BadPaddingException | IllegalBlockSizeException e) {
                 //  if any exception is thrown, this cipher object may need to be reset before it can be used again.
                 asym_cipher.init(Cipher.DECRYPT_MODE, key_pair.getPrivate());
                 throw e;
@@ -551,7 +764,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
     }
 
     /** Used to reconstitute public key sent in byte form from peer */
-    protected PublicKey generatePubKey(byte[] encodedKey) {
+    protected PublicKey makePublicKey(byte[] encodedKey) {
         PublicKey pubKey=null;
         try {
             KeyFactory KeyFac=KeyFactory.getInstance(getAlgorithm(asym_algorithm));

@@ -70,7 +70,7 @@ A receives the JOIN-REQ from E
 ------------------------------
 - If the header contains the public key of E:
     - Add E and its public key to pub-map
-    - Multicast a PUB-KEY message
+    - Multicast a PUB-KEY message containing the mapping between E and its public key
 
 
 A sends the JOIN-RSP to E
@@ -78,31 +78,32 @@ A sends the JOIN-RSP to E
 - If EX == false:
     - ASYM_ENCRYPT gets E's public key from pub-map, encrypts the SGK with it, and adds the
       encrypted SGK to the JOIN-RSP
+    - Send a PUB-KEY message to E containing all mappings between members and their public keys
 - Else
-    - ASYM_ENCRYPT sends a GET-SHARED-KEY message (before the JOIN-RSP) to E
-
-
-E receives the GET-SHARED-KEY message from A
---------------------------------------------
-- E asks its KEY_EXCHANGE protocol to fetch the SGK
-- E *blocks* until the SGK has been retrieved and installed. This prevents the delivery of the JOIN-RSP,
-  as the latter was sent after the GET-SHARED-KEY message. This means that the JOIN-RSP will have a valid
-  SGK in place to decrypt it.
+    - ASYM_ENCRYPT sends a FETCH-SHARED-KEY message (before the JOIN-RSP) to E
 
 
 E receives the JOIN-RSP from A
 ------------------------------
 - If EX == false:
     - Get the encrypted SGK from the JOIN-RSP
-    - Install the SGK
+    - Decrypt the encrypted SGK with the private key and install it
     - Pass the JOIN-RSP up (this will install the view)
 - Else:
     - The SGK has already been installed as part of the prior key exchange run
 
 
+E receives the FETCH-SHARED-KEY message from A
+----------------------------------------------
+- E asks its KEY_EXCHANGE protocol to fetch the SGK
+- E *blocks* until the SGK has been retrieved and installed. This prevents the delivery of the JOIN-RSP,
+  as the latter was sent after the FETCH-SHARED-KEY message. This means that the JOIN-RSP will have a valid
+  SGK in place to decrypt it.
+
+
 On reception of PUB-KEY:
 ------------------------
-- Add the mapping between member and public key to pub-map
+- Add the mappings between members and public key to pub-map
 
 
 On view change
@@ -128,23 +129,23 @@ On a merge-view:
 A multicasts view V2={A,B,C}
 ----------------------------
 - If EX:
-    - ASYM_ENCRYPT multicasts a GET-SHARED-KEY message to all members (minus itself)
+    - ASYM_ENCRYPT multicasts a FETCH-SHARED-KEY message to all members (minus itself)
 - Else
     - ASYM_ENCRYPT creates a map of members (B and C), grabs their public keys from pub-map, and adds the SGK
       encrypted with the respective member's public key.
-    - An INSTALL-SECRET-KEY message with the above map as payload is multicast to all members (B and C)
+    - An INSTALL-SHARED-KEY message with the above map as payload is multicast to all members (B and C)
 - The VIEW message is multicast to B and C
 
 
-B and C receive the GET-SHARED-KEY message from A
--------------------------------------------------
+B and C receive the FETCH-SHARED-KEY message from A
+---------------------------------------------------
 - Both members ask its KEY_EXCHANGE protocol to fetch the SGK
 - This *blocks* until the SGK has been retrieved and installed. This prevents the delivery of the succeeding VIEW message,
-  as the latter was sent after the GET-SHARED-KEY message. This means that the VIEW message will have a valid
+  as the latter was sent after the FETCH-SHARED-KEY message. This means that the VIEW message will have a valid
   SGK in place to decrypt it.
 
 
-B and C receive an INSTALL-SECRET-KEY message from A
+B and C receive an INSTALL-SHARED-KEY message from A
 ----------------------------------------------------
 - Each member reads the map from the payload and gets the encrypted SGK associated with itself from the map
 - The encrypted SGK is then decrypted with the member's private key, and the resulting SGK is installed
@@ -164,13 +165,13 @@ Members B and C receive V2
 New coord D multicasts MergeView V6={D,E,C,B,A,F}
 -------------------------------------------------
 - If EX:
-    - ASYM_ENCRYPT on new coordinator D sends (unicast) GET-SHARED-KEY messages to each of E,C,B,A,F (see [1])
+    - ASYM_ENCRYPT on new coordinator D sends (unicast) FETCH-SHARED-KEY messages to each of E,C,B,A,F (see [1])
 - Else
     - D sends (unicast) SEND-PUB-KEY messages to each of E,C,B,A,F (see [1])
     - Wait until we have the public keys of all members of V6
     - Create a map of all members, grab their public keys from pub-map, and add the SGK encrypted with the respective
       member's public key.
-    - A (unicast) INSTALL-SECRET-KEY message with the above map as payload is sent to each of E,C,B,A,F (see [1])
+    - A (unicast) INSTALL-SHARED-KEY message with the above map as payload is sent to each of E,C,B,A,F (see [1])
 - The MERGE-VIEW message is multicast to all members in the current subgroup {D,E,F}
 
 
@@ -189,7 +190,14 @@ Misc
   different wall clock times, e.g. V6 might get installed at T5 in {D,E,F}, but at T100 in {A,B,C}.
 - If D multicast GET_SHARED_KEY at T50, then subgroup {A,B,C} would reject the message, because at T50, D was not (yet)
   a member of that subgroup. Unless FLUSH was configured, MergeViews are installed asynchronously in subgroups.
-- Therefore *unicast messages* to all members are used to make sure the GET-SHARED-KEY messages are received by all
+- Therefore *unicast messages* to all members are used to make sure the FETCH-SHARED-KEY messages are received by all
   members of a MergeView: unicast messages can be delivered to members outside the current view.
+
+
+[2] ASYM_ENCRYPT must be located *below* GMS but *above* NAKACK2/UNICAST3
+-------------------------------------------------------------------------
+- The reason for below GMS is that ASYM_ENCRYPT has to intercept JOIN-REQ/JOIN-RSP and view installations
+- The reason for above NAKACK2/UNICAST3 is that some messages need to be reliable (PUB-KEY) and others require
+  ordering, e.g. the INSTALL-SHARED-KEY multicast needs to be delivered *before* the new VIEW
 
 

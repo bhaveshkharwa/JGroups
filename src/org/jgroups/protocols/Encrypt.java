@@ -322,8 +322,7 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
         return msg.setBuffer(decrypted_msg);
     }
 
-
-    protected void encryptAndSend(Message msg) throws Exception {
+    protected Message encrypt(Message msg) throws Exception {
         EncryptHeader hdr=new EncryptHeader(EncryptHeader.ENCRYPT, symVersion());
 
         // copy needed because same message (object) may be retransmitted -> prevent double encryption
@@ -335,7 +334,11 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
             if(payload != null) // we don't encrypt empty buffers (https://issues.jboss.org/browse/JGRP-2153)
                 msgEncrypted.setBuffer(payload, msg.getOffset(), msg.getLength());
         }
-        down_prot.down(msgEncrypted);
+        return msgEncrypted;
+    }
+
+    protected void encryptAndSend(Message msg) throws Exception {
+        down_prot.down(encrypt(msg));
     }
 
 
@@ -344,7 +347,8 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
         Cipher cipher=queue.take();
         try {
             return cipher.doFinal(buf, offset, length);
-        } catch(BadPaddingException | IllegalBlockSizeException e) {
+        }
+        catch(BadPaddingException | IllegalBlockSizeException e) {
             //  if any exception is thrown, this cipher object may need to be reset before it can be used again.
             cipher.init(decode ? Cipher.DECRYPT_MODE : Cipher.ENCRYPT_MODE, secret_key);
             throw e;
