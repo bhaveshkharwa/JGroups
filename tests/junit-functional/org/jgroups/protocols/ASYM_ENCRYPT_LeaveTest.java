@@ -25,7 +25,7 @@ public class ASYM_ENCRYPT_LeaveTest {
     protected static final String      KEYSTORE="my-keystore.jks";
     protected static final String      KEYSTORE_PWD="password";
     protected static final int         NUM=10;
-    protected static final int         NUM_LEAVERS=1;
+    protected static final int         NUM_LEAVERS=2;
     protected static final InetAddress LOOPBACK;
 
     protected JChannel[] channels=new JChannel[NUM];
@@ -84,12 +84,12 @@ public class ASYM_ENCRYPT_LeaveTest {
           // new FD_ALL(),
           // new VERIFY_SUSPECT(),
           new SSL_KEY_EXCHANGE().setKeystoreName(KEYSTORE).setKeystorePassword(KEYSTORE_PWD).setPortRange(10),
-          new ASYM_ENCRYPT().setUseExternalKeyExchange(true).setChangeKeyOnLeave(true)
-            .symKeylength(128).symAlgorithm("AES").asymKeylength(512).asymAlgorithm("RSA"),
           new NAKACK2().setUseMcastXmit(false),
           new UNICAST3(),
           new STABLE(),
-          new GMS().joinTimeout(1000))
+          new ASYM_ENCRYPT().setUseExternalKeyExchange(false).setChangeKeyOnLeave(true)
+            .symKeylength(128).symAlgorithm("AES").asymKeylength(512).asymAlgorithm("RSA"),
+          new GMS().joinTimeout(1000).leaveTimeout(10000))
           .name(name);
     }
 

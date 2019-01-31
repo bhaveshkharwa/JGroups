@@ -163,17 +163,21 @@ Members B and C receive V2
 - Clusters are V5={A,B,C} and V5={D,E,F}
 
 
-New coord D multicasts MergeView V6={D,E,C,B,A,F}
--------------------------------------------------
+New coord A unicasts INSTALL-MERGE-VIEW MergeView V6={A,B,C,D,E,F} to subgroup coords A and D
+---------------------------------------------------------------------------------------------
 - If EX:
-    - ASYM_ENCRYPT on new coordinator D sends (unicast) FETCH-SHARED-KEY messages to each of E,C,B,A,F (see [1])
+    - ASYM_ENCRYPT on (new coordinator) A unicasts a FETCH-SHARED-KEY message to the subgroup coords A and D
+        - On reception, A and D multicast the FETCH-SHARED-KEY message to their respective subgroups
 - Else
-    - D sends (unicast) SEND-PUB-KEY messages to each of E,C,B,A,F (see [1])
+    - D sends (unicast) SEND-PUB-KEY messages to each of B,C,D,E,F (see [1])
     - Wait until we have the public keys of all members of V6
     - Create a map of all members, grab their public keys from pub-map, and add the SGK encrypted with the respective
       member's public key.
-    - A (unicast) INSTALL-SHARED-KEY message with the above map as payload is sent to each of E,C,B,A,F (see [1])
-- The MERGE-VIEW message is multicast to all members in the current subgroup {D,E,F}
+    - A (unicast) INSTALL-SHARED-KEY message with the above map as payload is sent to each of the subgroup coordinators
+      (A and D). On reception, A and D multicast the INSTALL_SHARED_KEY message to their subgroups
+- The MERGE-VIEW message is unicast to the subgroup coord A and D
+    - On reception, A and D multicast the MERGE-VIEW message.
+- For ordering details see [3].
 
 
 On reception of a SEND-PUB-KEY message from D
@@ -202,3 +206,14 @@ Misc
   ordering, e.g. the INSTALL-SHARED-KEY multicast needs to be delivered *before* the new VIEW
 
 
+[3] Ordering between unicast and multicast messages on a merge
+--------------------------------------------------------------
+- The INSTALL-SHARED-KEY and MERGE-VIEW messages are unicast by A to {A,D}
+- This means that both A and D will deliver INSTALL-SHARED-KEY *before* MERGE-VIEW as unicasts from the same
+  member are ordered in send-order of A
+- The delivery of unicast INSTALL-SHARED-KEY in A and D triggers a multicast INSTALL-SHARED-KEY to the respective subgroups
+- The delivery of unicast MERGE-VIEW in A and D triggers a multicast MERGE-VIEW to the respective subgroups
+- Because the unicast INSTALL-SHARED-KEY and MERGE-VIEW messages are delivered in order, this also guarantees the
+  ordering between the multicast INSTALL-SHARED-KEY and MERGE-VIEW messages: the former will be delivered before the
+  latter. This ensures that each member of all subgroups will have the new shared group key install before receicing the
+  merge view, and can therefore decrypt it.

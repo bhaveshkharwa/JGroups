@@ -304,11 +304,8 @@ public class Merger {
     }
 
     /**
-     * Sends the new view and digest to all subgroup coordinors in coords. Each coord will in turn
-     * <ol>
-     * <li>broadcast the new view and digest to all the members of its subgroup (MergeView)
-     * <li>on reception of the view, if it is a MergeView, each member will set the digest and install the new view
-     * </ol>
+     * Sends the new view and digest to all subgroup coordinators. Each coord will in turn broadcast the new view and
+     * digest to all the members of its subgroup
      */
     protected void sendMergeView(Collection<Address> coords, MergeData combined_merge_data, MergeId merge_id) {
         if(coords == null || combined_merge_data == null)
@@ -334,7 +331,7 @@ public class Merger {
             gms.getDownProtocol().down(msg);
         }
 
-        //[JGRP-700] - FLUSH: flushing should span merge; if flush is in stack wait for acks from subview coordinators
+        //[JGRP-700] - FLUSH: flushing should span merge; if flush is in stack, wait for acks from subview coordinators
         if(gms.flushProtocolInStack) {
             try {
                 gms.merge_ack_collector.waitForAllAcks(gms.view_ack_collection_timeout);

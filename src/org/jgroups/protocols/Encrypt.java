@@ -5,6 +5,7 @@ import org.jgroups.Event;
 import org.jgroups.Message;
 import org.jgroups.View;
 import org.jgroups.annotations.ManagedAttribute;
+import org.jgroups.annotations.ManagedOperation;
 import org.jgroups.annotations.Property;
 import org.jgroups.stack.Protocol;
 import org.jgroups.util.AsciiString;
@@ -23,6 +24,7 @@ import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.function.BiConsumer;
+import java.util.stream.Collectors;
 
 /**
  * Super class of symmetric ({@link SYM_ENCRYPT}) and asymmetric ({@link ASYM_ENCRYPT}) encryption protocols.
@@ -105,6 +107,14 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
     public <T extends Encrypt<E>> T localAddress(Address addr)      {this.local_addr=addr; return (T)this;}
     @ManagedAttribute public String version()                       {return Util.byteArrayToHexString(sym_version);}
 
+
+    @ManagedOperation(description="Prints the versions of the shared group keys cached in the key map")
+    public String printCachedGroupKeys() {
+        return key_map.keySet().stream().map(v -> Util.byteArrayToHexString(v.chars()))
+          .collect(Collectors.joining(", "));
+    }
+
+
     public void init() throws Exception {
         int tmp=Util.getNextHigherPowerOfTwo(cipher_pool_size);
         if(tmp != cipher_pool_size) {
@@ -136,7 +146,6 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
             if(secret_key == null) {
                 log.trace("%s: discarded %s message to %s as secret key is null, hdrs: %s",
                           local_addr, msg.dest() == null? "mcast" : "unicast", msg.dest(), msg.printHeaders());
-                secretKeyNotAvailable();
                 return null;
             }
             encryptAndSend(msg);
@@ -235,21 +244,15 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
         }
         switch(hdr.type()) {
             case EncryptHeader.ENCRYPT:
-                return handleEncryptedMessage(msg, hdr.version);
+                return handleEncryptedMessage(msg);
             default:
                 return handleUpEvent(msg,hdr);
         }
     }
 
 
-    protected Object handleEncryptedMessage(Message msg, byte[] version) throws Exception {
-        if(!Arrays.equals(sym_version, version)) { // only check if msg needs to be queued if versions differ
-            versionMismatch(msg);
-            return null;
-        }
-
-        // try and decrypt the message - we need to copy msg as we modify its
-        // buffer (http://jira.jboss.com/jira/browse/JGRP-538)
+    protected Object handleEncryptedMessage(Message msg) throws Exception {
+        // decrypt the message; we need to copy msg as we modify its buffer (http://jira.jboss.com/jira/browse/JGRP-538)
         Message tmpMsg=decryptMessage(null, msg.copy()); // need to copy for possible xmits
         if(tmpMsg != null)
             return up_prot.up(tmpMsg);
@@ -259,19 +262,6 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
 
     protected Object handleUpEvent(Message msg, EncryptHeader hdr) {
         return null;
-    }
-
-    /** Called when the installed version is null, or doesn't match the version shipped with the received message */
-    protected void versionMismatch(Message msg) {}
-
-    /** Called when the version shipped in the header can't be found */
-    protected void handleUnknownVersion(byte[] version) {
-
-    }
-
-    /** Called when the secret key is null */
-    protected void secretKeyNotAvailable() {
-
     }
 
 
@@ -294,10 +284,13 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
         if(!Arrays.equals(hdr.version(), sym_version)) {
             cipher=key_map.get(new AsciiString(hdr.version()));
             if(cipher == null) {
-                handleUnknownVersion(hdr.version);
+                log.trace("%s: message with version %s dropped, as a cipher matching that version wasn't found " +
+                            "(current version: %s)",
+                          local_addr, Util.byteArrayToHexString(hdr.version()), Util.byteArrayToHexString(sym_version));
                 return null;
             }
-            log.trace("%s: decrypting msg from %s using previous cipher version", local_addr, msg.src());
+            log.trace("%s: decrypting msg from %s using previous cipher version %s",
+                      local_addr, msg.src(), Util.byteArrayToHexString(hdr.version()));
             return _decrypt(cipher, msg);
         }
         return _decrypt(cipher, msg);
@@ -385,11 +378,6 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
 
             if(hdr.type() == EncryptHeader.ENCRYPT) {
                 try {
-                    if(!Arrays.equals(sym_version, hdr.version)) { // only check if msg needs to be queued if versions differ
-                        versionMismatch(msg);
-                        batch.remove(msg);
-                        return;
-                    }
                     Message tmpMsg=decryptMessage(cipher, msg.copy()); // need to copy for possible xmits
                     if(tmpMsg != null)
                         batch.replace(msg, tmpMsg);

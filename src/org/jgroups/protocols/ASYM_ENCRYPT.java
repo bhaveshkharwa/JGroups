@@ -1,9 +1,11 @@
 package org.jgroups.protocols;
 
-import org.jgroups.*;
+import org.jgroups.Address;
+import org.jgroups.Event;
+import org.jgroups.Message;
+import org.jgroups.View;
 import org.jgroups.annotations.MBean;
 import org.jgroups.annotations.ManagedAttribute;
-import org.jgroups.annotations.ManagedOperation;
 import org.jgroups.annotations.Property;
 import org.jgroups.conf.ClassConfigurator;
 import org.jgroups.protocols.pbcast.GMS;
@@ -54,23 +56,12 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
       " fetch the shared secret key. If false, the default (built-in) key exchange protocol will be used.")
     protected boolean                              use_external_key_exchange;
 
-    @Property(description="Interval (in ms) to send out announcements when the key server changed. Members will then " +
-      "start the key exchange protocol. When all members have acked, the task is cancelled.")
-    protected long                                 key_server_interval=1000;
-
-    protected volatile View                        prev_view;
     protected volatile Address                     key_server_addr;
     protected KeyPair                              key_pair;     // to store own's public/private Key
     protected Cipher                               asym_cipher;  // decrypting cypher for secret key requests
 
-    @Property(description="Min time (in millis) between key requests")
-    protected long                                 min_time_between_key_requests=2000;
-    protected volatile long                        last_key_request;
-
     // use registerBypasser to add code that is called to check if a message should bypass ASYM_ENCRYPT
     protected List<BiPredicate<Message,Boolean>>   bypassers;
-
-    protected ResponseCollectorTask<Boolean>       key_requesters;
 
     // map of members and their public keys
     protected final Map<Address,byte[]>            pub_map=new ConcurrentHashMap<>();
@@ -87,9 +78,6 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
 
     public boolean      getUseExternalKeyExchange()          {return use_external_key_exchange;}
     public ASYM_ENCRYPT setUseExternalKeyExchange(boolean u) {use_external_key_exchange=u; return this;}
-
-    public long         getKeyserverInterval()               {return key_server_interval;}
-    public ASYM_ENCRYPT setKeyserverInterval(long i)         {key_server_interval=i; return this;}
 
     public KeyPair      keyPair()                            {return key_pair;}
     public Cipher       asymCipher()                         {return asym_cipher;}
@@ -125,14 +113,6 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
     @ManagedAttribute(description="The current key server")
     public String getKeyServerAddress() {return key_server_addr != null? key_server_addr.toString() : "null";}
 
-    @ManagedOperation(description="Triggers a request for the secret key to the current keyserver")
-    public void sendKeyRequest() {
-        if(key_server_addr == null) {
-            log.debug("%s: sending secret key request failed as the key server is currently not set", local_addr);
-            return;
-        }
-        sendKeyRequest(key_server_addr);
-    }
 
     @ManagedAttribute(description="True if this member is the current key server, false otherwise")
     public boolean isKeyServer() {
@@ -149,11 +129,6 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         }
     }
 
-    public void stop() {
-        if(key_requesters != null)
-            key_requesters.stop();
-        super.stop();
-    }
 
     public void start() throws Exception {
         super.start();
@@ -183,7 +158,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                         byte[] encryptedKey=encryptSecretKey(secret_key, makePublicKey(pk));
                         EncryptHeader eh=encrypted_msg.getHeader(id);
                         eh.key(encryptedKey);
-                        log.debug("%s: sending secret key response to %s (version: %s)",
+                        log.debug("%s: sending encrypted group key to %s (version: %s)",
                                   local_addr, encrypted_msg.getDest(), Util.byteArrayToHexString(sym_version));
                         down_prot.down(encrypted_msg);
 
@@ -209,7 +184,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
             case Event.SET_SECRET_KEY:
                 Tuple<SecretKey,byte[]> tuple=evt.arg();
                 try {
-                    setKeys(null, tuple.getVal1(), tuple.getVal2());
+                    installSharedGroupKey(null, tuple.getVal1(), tuple.getVal2());
                 }
                 catch(Exception ex) {
                     log.error("failed setting secret key", ex);
@@ -224,16 +199,10 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
             return up_prot.up(msg);
 
         GMS.GmsHeader hdr=msg.getHeader(GMS_ID);
-        if(hdr == null)
-            return super.up(msg);
-
-        checkForPubKeyOrPrivateKey(msg, hdr);
-        if(skip(hdr))
-            return up_prot.up(msg);
-
-        if(isJoinOrInstallViewMessage(hdr)) {
-            Address key_server=msg.getSrc();
-            sendKeyRequest(key_server);
+        if(hdr != null) {
+            interceptGmsHeader(msg, hdr);
+            if(skip(hdr))
+                return up_prot.up(msg);
         }
         return super.up(msg);
     }
@@ -248,7 +217,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
 
             GMS.GmsHeader hdr=msg.getHeader(GMS_ID);
             if(hdr != null) {
-                checkForPubKeyOrPrivateKey(msg, hdr);
+                interceptGmsHeader(msg, hdr);
                 if(skip(hdr)) {
                     try {
                         up_prot.up(msg);
@@ -258,10 +227,6 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                         log.error("failed passing up message from %s: %s, ex=%s", msg.src(), msg.printHeaders(), t);
                     }
                     continue;
-                }
-                if(isJoinOrInstallViewMessage(hdr)) {
-                    Address key_server=batch.sender(); // getCoordinator(msg, hdr);
-                    sendKeyRequest(key_server);
                 }
             }
 
@@ -277,7 +242,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
 
     /** Checks if the message contains a public key (and adds it to pub_map if present) or an encrypted group key
      * (and installs it if present) */
-    protected void checkForPubKeyOrPrivateKey(Message msg, GMS.GmsHeader hdr) {
+    protected void interceptGmsHeader(Message msg, GMS.GmsHeader hdr) {
         EncryptHeader h=msg.getHeader(this.id);
         if(h == null || h.key() == null)
             return;
@@ -288,7 +253,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                 sendPublicKeys(null); // multicast PUB_KEY message to other members (*exclude self*!)
                 break;
             case GMS.GmsHeader.JOIN_RSP:
-                handleSecretKeyResponse(msg.getSrc(), h.version(), h.key());
+                handleSharedGroupKeyResponse(msg.getSrc(), h.version(), h.key());
                 break;
             case GMS.GmsHeader.VIEW:
                 handleSharedGroupKeyResponse(msg.getSrc(), h.version(), msg.getRawBuffer(), msg.getOffset(), msg.getLength());
@@ -314,16 +279,6 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         return false;
     }
 
-    protected static boolean isJoinOrInstallViewMessage(GMS.GmsHeader hdr) {
-        if(hdr == null)
-            return false;
-        switch(hdr.getType()) {
-            case GMS.GmsHeader.JOIN_RSP:
-            case GMS.GmsHeader.INSTALL_MERGE_VIEW:
-                return true;
-        }
-        return false;
-    }
 
     protected boolean bypass(Message msg, boolean up) {
         List<BiPredicate<Message,Boolean>> tmp=bypassers;
@@ -339,26 +294,6 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
 
     @Override protected Object handleUpEvent(Message msg, EncryptHeader hdr) {
         switch(hdr.type()) {
-            case EncryptHeader.SECRET_KEY_REQ:
-                handleSecretKeyRequest(msg);
-                break;
-            case EncryptHeader.SECRET_KEY_RSP:
-                handleSecretKeyResponse(msg, hdr.version());
-                sendNewKeyserverAck(msg.src());
-                break;
-            case EncryptHeader.NEW_KEYSERVER:
-                Address sender=msg.src();
-                if(!inView(sender, "key server %s is not in the current view %s; ignoring NEW_KEYSERVER msg"))
-                    return null;
-                if(!Arrays.equals(sym_version, hdr.version)) // only send if sym_versions differ
-                    sendKeyRequest(sender);
-                else
-                    sendNewKeyserverAck(sender);
-                break;
-            case EncryptHeader.NEW_KEYSERVER_ACK:
-                if(key_requesters != null)
-                    key_requesters.add(msg.src(), true);
-                break;
             case EncryptHeader.PUB_KEY:
                 installPublicKeys(msg.getSrc(), msg.getRawBuffer(), msg.getOffset(), msg.getLength());
                 break;
@@ -369,74 +304,23 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         return null;
     }
 
-    @Override protected void versionMismatch(Message msg) {
-        sendKeyRequest(key_server_addr);
-    }
 
-    @Override protected void handleUnknownVersion(byte[] version) {
-        if(!isKeyServer()) {
-            log.debug("%s: received msg encrypted with version %s (my version: %s), getting new secret key from %s",
-                      local_addr, Util.byteArrayToHexString(version), Util.byteArrayToHexString(sym_version), key_server_addr);
-            sendKeyRequest(key_server_addr);
-        }
-    }
-
-    @Override protected void secretKeyNotAvailable() {
-        if(!isKeyServer())
-            sendKeyRequest(key_server_addr);
-    }
-
-    protected void handleSecretKeyRequest(final Message msg) {
-        if(!inView(msg.src(), "key requester %s is not in current view %s; ignoring key request"))
-            return;
-        log.debug("%s: received secret key request from %s", local_addr, msg.getSrc());
-        try {
-            PublicKey tmpKey=makePublicKey(msg.getBuffer());
-            sendSecretKey(secret_key, tmpKey, msg.getSrc());
-        }
-        catch(Exception e) {
-            log.warn("%s: unable to reconstitute peer's public key", local_addr);
-        }
-    }
-
-
-    protected void handleSecretKeyResponse(final Message msg, final byte[] key_version) {
-        if(!inView(msg.src(), "ignoring secret key sent by %s which is not in current view %s"))
+    protected void handleSharedGroupKeyResponse(Address sender, byte[] key_version, byte[] encrypted_key) {
+        if(!inView(sender, "ignoring group key sent by %s which is not in current view %s"))
             return;
 
         if(Arrays.equals(sym_version, key_version)) {
-            log.debug("%s: secret key (version %s) already installed, ignoring key response from %s",
-                      local_addr, Util.byteArrayToHexString(key_version), msg.src());
-            return;
-        }
-        try {
-            SecretKey tmp=decodeKey(msg.getBuffer());
-            if(tmp == null)
-                sendKeyRequest(key_server_addr);      // unable to understand response, let's try again
-            else
-                setKeys(msg.src(), tmp, key_version); // otherwise set the received key as the shared key
-        }
-        catch(Exception e) {
-            log.warn("%s: unable to process key received from %s: %s", local_addr, msg.src(), e);
-        }
-    }
-
-    protected void handleSecretKeyResponse(Address sender, byte[] key_version, byte[] encrypted_key) {
-        if(!inView(sender, "ignoring secret key sent by %s which is not in current view %s"))
-            return;
-
-        if(Arrays.equals(sym_version, key_version)) {
-            log.debug("%s: secret key (version %s) already installed, ignoring key response from %s",
+            log.debug("%s: group key (version %s) already installed, ignoring group key received from %s",
                       local_addr, Util.byteArrayToHexString(key_version), sender);
             return;
         }
         try {
             SecretKey tmp=decodeKey(encrypted_key);
             if(tmp != null)
-                setKeys(sender, tmp, key_version); // otherwise set the received key as the shared key
+                installSharedGroupKey(sender, tmp, key_version); // otherwise set the received key as the shared key
         }
         catch(Exception e) {
-            log.warn("%s: unable to process key received from %s: %s", local_addr, sender, e);
+            log.warn("%s: unable to decode encrypted group key received from %s: %s", local_addr, sender, e);
         }
     }
 
@@ -516,7 +400,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         try {
             SecretKey tmp=decodeKey(encrypted_key);
             if(tmp != null)
-                setKeys(sender, tmp, version); // otherwise set the received key as the shared key
+                installSharedGroupKey(sender, tmp, version); // otherwise set the received key as the shared key
         }
         catch(Exception e) {
             log.warn("%s: unable to process key received from %s: %s", local_addr, sender, e);
@@ -606,10 +490,6 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
             left_mbrs=change_key_on_leave && this.view != null && !v.containsMembers(this.view.getMembersRaw());
             create_new_key=secret_key == null || left_mbrs;
             super.handleView(v);
-
-            if(key_requesters != null)
-                key_requesters.retainAll(v.getMembers());
-
             old_key_server=key_server_addr;
             key_server_addr=v.getCoord(); // the coordinator is the keyserver
             if(Objects.equals(key_server_addr, local_addr)) {
@@ -617,28 +497,11 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                     log.debug("%s: I'm the new key server", local_addr);
                 if(create_new_key) {
                     createNewKey();
-                    if(key_requesters != null)
-                        key_requesters.stop();
-                    List<Address> targets=new ArrayList<>(v.getMembers());
-                    targets.remove(local_addr);
-
-                    if(!targets.isEmpty()) {  // https://issues.jboss.org/browse/JGRP-2203
-                        key_requesters=new ResponseCollectorTask<Boolean>(targets)
-                          .setPeriodicTask(c -> {
-                              Message msg=new Message(null).setTransientFlag(Message.TransientFlag.DONT_LOOPBACK)
-                                .putHeader(id, new EncryptHeader(EncryptHeader.NEW_KEYSERVER, sym_version));
-                              down_prot.down(msg);
-                          })
-                          .start(getTransport().getTimer(), 0, key_server_interval);
-                    }
-                    // multicast an INSTALL_SHARED_KEY message to all members (delivered before the view message)
-                    if(left_mbrs)
+                    if(left_mbrs) // multicast an INSTALL_SHARED_KEY message to all members (delivered before the view message)
                         sendSharedGroupKeys(null);
                 }
-                return;
             }
         }
-        handleNewKeyServer(old_key_server, v instanceof MergeView, left_mbrs);
     }
 
 
@@ -647,48 +510,34 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
             this.secret_key=createSecretKey();
             initSymCiphers(sym_algorithm, secret_key);
             log.debug("%s: created new secret key (version: %s)", local_addr, Util.byteArrayToHexString(sym_version));
+            cacheGroupKey(sym_version);
         }
         catch(Exception ex) {
             log.error("%s: failed creating secret key and initializing ciphers", local_addr, ex);
         }
     }
 
-    /** If the keyserver changed, send a request for the secret key to the keyserver */
-    protected void handleNewKeyServer(Address old_key_server, boolean merge_view, boolean left_mbrs) {
-        if(change_key_on_leave && (keyServerChanged(old_key_server) || merge_view || left_mbrs)) {
-            sendKeyRequest(key_server_addr);
-        }
-    }
 
-	protected boolean keyServerChanged(Address old_keyserver) {
-		return !Objects.equals(key_server_addr, old_keyserver);
-	}
-
-
-    protected synchronized void setKeys(Address sender, SecretKey key, byte[] version) throws Exception {
+    protected synchronized void installSharedGroupKey(Address sender, SecretKey key, byte[] version) throws Exception {
         if(Arrays.equals(this.sym_version, version)) {
-            log.debug("%s: ignoring secret key received from %s (version: %s), as it has already been installed",
+            log.debug("%s: ignoring group key received from %s (version: %s); it has already been installed",
                       local_addr, sender != null? sender : "key exchange protocol", Util.byteArrayToHexString(version));
             return;
         }
-        Cipher decoding_cipher=secret_key != null? decoding_ciphers.take() : null;
-        // put the previous key into the map, keep the cipher: no leak, as we'll recreate decoding_ciphers in initSymCiphers()
-        if(decoding_cipher != null)
-            key_map.putIfAbsent(new AsciiString(version), decoding_cipher);
-        log.debug("%s: installing secret key received from %s (version: %s)",
+        log.debug("%s: installing group key received from %s (version: %s)",
                   local_addr, sender != null? sender : "key exchange protocol", Util.byteArrayToHexString(version));
         secret_key=key;
         initSymCiphers(key.getAlgorithm(), key);
         sym_version=version;
+        cacheGroupKey(version);
     }
 
-
-    protected void sendSecretKey(Key secret_key, PublicKey public_key, Address source) throws Exception {
-        byte[] encryptedKey=encryptSecretKey(secret_key, public_key);
-        Message newMsg=new Message(source, encryptedKey).src(local_addr)
-          .putHeader(this.id, new EncryptHeader(EncryptHeader.SECRET_KEY_RSP, symVersion()));
-        log.debug("%s: sending secret key response to %s (version: %s)", local_addr, source, Util.byteArrayToHexString(sym_version));
-        down_prot.down(newMsg);
+    /** Cache the current shared key (and its cipher) to decrypt messages encrypted with the old shared group key */
+    protected void cacheGroupKey(byte[] version) throws Exception {
+        Cipher decoding_cipher=secret_key != null? decoding_ciphers.take() : null;
+        // put the previous key into the map, keep the cipher: no leak, as we'll recreate decoding_ciphers in initSymCiphers()
+        if(decoding_cipher != null)
+            key_map.putIfAbsent(new AsciiString(version), decoding_cipher);
     }
 
     /** Encrypts the current secret key with the requester's public key (the requester will decrypt it with its private key) */
@@ -702,34 +551,6 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
 
         // encrypt current secret key
         return tmp.doFinal(secret_key.getEncoded());
-    }
-
-
-    /** send client's public key to server and request server's public key */
-    protected void sendKeyRequest(Address key_server) {
-        if(key_server == null)
-            return;
-        if(last_key_request == 0 || System.currentTimeMillis() - last_key_request > min_time_between_key_requests)
-            last_key_request=System.currentTimeMillis();
-        else
-            return;
-
-        if(use_external_key_exchange) {
-            log.debug("%s: asking key exchange protocol to get secret key from %s", local_addr, key_server);
-            down_prot.down(new Event(Event.FETCH_SECRET_KEY, key_server));
-            return;
-        }
-
-        log.debug("%s: asking %s for the secret key (my version: %s)",
-                  local_addr, key_server, Util.byteArrayToHexString(sym_version));
-        Message newMsg=new Message(key_server, key_pair.getPublic().getEncoded()).src(local_addr)
-          .putHeader(this.id,new EncryptHeader(EncryptHeader.SECRET_KEY_REQ, null));
-        down_prot.down(newMsg);
-    }
-
-    protected void sendNewKeyserverAck(Address dest) {
-        Message msg=new Message(dest).putHeader(id, new EncryptHeader(EncryptHeader.NEW_KEYSERVER_ACK, null));
-        down_prot.down(msg);
     }
 
 

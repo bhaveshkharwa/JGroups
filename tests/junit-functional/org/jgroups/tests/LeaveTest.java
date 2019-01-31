@@ -211,9 +211,9 @@ public class LeaveTest {
           new MPING(),
           // omit MERGE3 from the stack -- nodes are leaving gracefully
           // new MERGE3().setMinInterval(1000).setMaxInterval(3000).setCheckInterval(5000),
-          new FD_SOCK(),
-          new FD_ALL(),
-          new VERIFY_SUSPECT(),
+          // new FD_SOCK(),
+          // new FD_ALL(),
+          // new VERIFY_SUSPECT(),
           new NAKACK2().setUseMcastXmit(false),
           new UNICAST3(), // .setXmitInterval(500),
           new STABLE(),

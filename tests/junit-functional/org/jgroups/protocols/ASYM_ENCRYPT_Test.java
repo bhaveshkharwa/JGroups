@@ -15,7 +15,6 @@ import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-import javax.crypto.SecretKey;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.stream.Stream;
@@ -92,52 +91,7 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
 
 
 
-    /**
-     * A non-member sends a {@link EncryptHeader#SECRET_KEY_REQ} request to the key server. Asserts that the rogue member
-     * doesn't get the secret key. If it did, it would be able to decrypt all messages from cluster members!
-     */
-    public void nonMemberGetsSecretKeyFromKeyServer() throws Exception {
-        Util.close(rogue);
-
-        rogue=new JChannel(Util.getTestStack()).name("rogue");
-        DISCARD discard=new DISCARD().setDiscardAll(true);
-        rogue.getProtocolStack().insertProtocol(discard, ProtocolStack.Position.ABOVE, TP.class);
-        CustomENCRYPT encrypt=new CustomENCRYPT();
-        encrypt.init();
-
-        rogue.getProtocolStack().insertProtocol(encrypt, ProtocolStack.Position.BELOW, NAKACK2.class);
-        rogue.connect(cluster_name); // creates a singleton cluster
-
-        assert rogue.getView().size() == 1;
-        GMS gms=rogue.getProtocolStack().findProtocol(GMS.class);
-        View rogue_view=new View(a.getAddress(), a.getView().getViewId().getId(),
-                                 Arrays.asList(a.getAddress(),b.getAddress(),c.getAddress(),rogue.getAddress()));
-        gms.installView(rogue_view);
-
-
-        // now fabricate a KEY_REQUEST message and send it to the key server (A)
-        Message newMsg=new Message(a.getAddress(), encrypt.keyPair().getPublic().getEncoded()).src(rogue.getAddress())
-          .putHeader(encrypt.getId(),new EncryptHeader(EncryptHeader.SECRET_KEY_REQ, encrypt.symVersion()));
-
-        discard.setDiscardAll(false);
-        System.out.printf("-- sending KEY_REQUEST to key server %s\n", a.getAddress());
-        encrypt.getDownProtocol().down(newMsg);
-        for(int i=0; i < 10; i++) {
-            SecretKey secret_key=encrypt.key;
-            if(secret_key != null)
-                break;
-            Util.sleep(500);
-        }
-
-        discard.setDiscardAll(true);
-        gms.installView(View.create(rogue.getAddress(), 20, rogue.getAddress()));
-        System.out.printf("-- secret key is %s (should be null)\n", encrypt.key);
-        assert encrypt.key == null : String.format("should not have received secret key %s", encrypt.key);
-    }
-
-
-
-    /** Verifies that a non-member (non-coord) cannot send a JOIN-RSP to a member */
+       /** Verifies that a non-member (non-coord) cannot send a JOIN-RSP to a member */
     public void nonMemberInjectingJoinResponse() throws Exception {
         Util.close(rogue);
         rogue=create("rogue");
@@ -352,26 +306,5 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
         return retval;
     }
 
-
-    protected static class CustomENCRYPT extends ASYM_ENCRYPT {
-        protected SecretKey key;
-
-        public CustomENCRYPT() {
-            this.id=ASYM_ENCRYPT_ID;
-        }
-
-        protected Object handleUpEvent(Message msg, EncryptHeader hdr) {
-            if(hdr.type() == EncryptHeader.SECRET_KEY_RSP) {
-                try {
-                    key=decodeKey(msg.getBuffer());
-                    System.out.printf("received secret key %s !\n", key);
-                }
-                catch(Exception e) {
-                    e.printStackTrace();
-                }
-            }
-            return super.handleUpEvent(msg, hdr);
-        }
-    }
 
 }
