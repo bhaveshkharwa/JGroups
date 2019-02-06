@@ -136,45 +136,12 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
     }
 
     public Object down(Message msg) {
-        GMS.GmsHeader hdr=msg.getHeader(GMS_ID);
-        if(hdr != null && !use_external_key_exchange) {
-            switch(hdr.getType()) {
-                case GMS.GmsHeader.JOIN_REQ:
-                case GMS.GmsHeader.JOIN_REQ_WITH_STATE_TRANSFER: // attach our public key to the JOIN-REQ
-                    EncryptHeader h=new EncryptHeader(EncryptHeader.PUB_KEY, symVersion())
-                      .key(key_pair.getPublic().getEncoded());
-                    msg.putHeader(this.id, h);
-                    return down_prot.down(msg);
-                case GMS.GmsHeader.JOIN_RSP:
-                    // add the shared group key, encrypted with the destination's public key (should be in pub_map)
-                    byte[] pk=pub_map.get(msg.getDest());
-                    if(pk == null) {
-                        log.error("%s: public key (to encrypted shared group key) for %s not found in pub-map",
-                                  local_addr, msg.dest());
-                        break;
-                    }
-                    try {
-                        Message encrypted_msg=encrypt(msg);
-                        byte[] encryptedKey=encryptSecretKey(secret_key, makePublicKey(pk));
-                        EncryptHeader eh=encrypted_msg.getHeader(id);
-                        eh.key(encryptedKey);
-                        log.debug("%s: sending encrypted group key to %s (version: %s)",
-                                  local_addr, encrypted_msg.getDest(), Util.byteArrayToHexString(sym_version));
-                        down_prot.down(encrypted_msg);
-
-                        // send a PUB_KEY message to the joiner
-                        sendPublicKeys(msg.getDest());
-                        return null;
-                    }
-                    catch(Exception e) {
-                        log.warn("%s: unable to send message down: %s", local_addr, e);
-                        return null;
-                    }
-            }
-        }
-        if(skip(hdr) || bypass(msg, false))
+        Processing processing=skipDownMessage(msg);
+        if(processing == Processing.PROCESS)
+            return super.down(msg);
+        if(processing == Processing.SKIP || bypass(msg, false))
             return down_prot.down(msg);
-        return super.down(msg);
+        return null; // DROP
     }
 
     public Object up(Event evt) {
@@ -187,7 +154,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                     installSharedGroupKey(null, tuple.getVal1(), tuple.getVal2());
                 }
                 catch(Exception ex) {
-                    log.error("failed setting secret key", ex);
+                    log.error("failed setting group key", ex);
                 }
                 return null;
         }
@@ -195,100 +162,31 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
     }
 
     public Object up(Message msg) {
-        if(bypass(msg, true))
+        if(skipUpMessage(msg) || bypass(msg, true))
             return up_prot.up(msg);
-
-        GMS.GmsHeader hdr=msg.getHeader(GMS_ID);
-        if(hdr != null) {
-            interceptGmsHeader(msg, hdr);
-            if(skip(hdr))
-                return up_prot.up(msg);
-        }
         return super.up(msg);
     }
 
     public void up(MessageBatch batch) {
         for(Message msg: batch) {
-            if(bypass(msg, true)) {
-                up_prot.up(msg);
-                batch.remove(msg);
+            if(skipUpMessage(msg) || bypass(msg, true)) {
+                try {
+                    up_prot.up(msg);
+                    batch.remove(msg);
+                }
+                catch(Throwable t) {
+                    log.error("failed passing up message from %s: %s, ex=%s", msg.src(), msg.printHeaders(), t);
+                }
                 continue;
             }
-
-            GMS.GmsHeader hdr=msg.getHeader(GMS_ID);
-            if(hdr != null) {
-                interceptGmsHeader(msg, hdr);
-                if(skip(hdr)) {
-                    try {
-                        up_prot.up(msg);
-                        batch.remove(msg);
-                    }
-                    catch(Throwable t) {
-                        log.error("failed passing up message from %s: %s, ex=%s", msg.src(), msg.printHeaders(), t);
-                    }
-                    continue;
-                }
-            }
-
             EncryptHeader eh=msg.getHeader(this.id);
             if(eh != null && eh.type != EncryptHeader.ENCRYPT) {
-                handleUpEvent(msg,eh);
+                handleUpEvent(msg, eh);
                 batch.remove(msg);
             }
         }
         if(!batch.isEmpty())
             super.up(batch); // decrypt the rest of the messages in the batch (if any)
-    }
-
-    /** Checks if the message contains a public key (and adds it to pub_map if present) or an encrypted group key
-     * (and installs it if present) */
-    protected void interceptGmsHeader(Message msg, GMS.GmsHeader hdr) {
-        EncryptHeader h=msg.getHeader(this.id);
-        if(h == null || h.key() == null)
-            return;
-        switch(hdr.getType()) {
-            case GMS.GmsHeader.JOIN_REQ:
-            case GMS.GmsHeader.JOIN_REQ_WITH_STATE_TRANSFER: // get the public key from the JOIN-REQ
-                pub_map.put(msg.src(), h.key());
-                sendPublicKeys(null); // multicast PUB_KEY message to other members (*exclude self*!)
-                break;
-            case GMS.GmsHeader.JOIN_RSP:
-                handleSharedGroupKeyResponse(msg.getSrc(), h.version(), h.key());
-                break;
-            case GMS.GmsHeader.VIEW:
-                handleSharedGroupKeyResponse(msg.getSrc(), h.version(), msg.getRawBuffer(), msg.getOffset(), msg.getLength());
-                break;
-        }
-    }
-
-
-    /** Checks if a message needs to be encrypted/decrypted, or whether it can bypass encryption */
-    protected static boolean skip(GMS.GmsHeader hdr) {
-        if(hdr == null)
-            return false;
-        switch(hdr.getType()) {
-            case GMS.GmsHeader.JOIN_REQ:
-            case GMS.GmsHeader.JOIN_REQ_WITH_STATE_TRANSFER:
-            case GMS.GmsHeader.MERGE_REQ:
-            case GMS.GmsHeader.MERGE_RSP:
-            case GMS.GmsHeader.VIEW_ACK:
-            case GMS.GmsHeader.GET_DIGEST_REQ:
-            case GMS.GmsHeader.GET_DIGEST_RSP:
-                return true;
-        }
-        return false;
-    }
-
-
-    protected boolean bypass(Message msg, boolean up) {
-        List<BiPredicate<Message,Boolean>> tmp=bypassers;
-        if(tmp == null)
-            return false;
-        for(BiPredicate<Message,Boolean> pred: tmp) {
-            if(pred.test(msg, up))
-                return true;
-        }
-        return false;
     }
 
 
@@ -300,8 +198,115 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
             case EncryptHeader.INSTALL_SHARED_KEY:
                 handleSharedGroupKeyResponse(msg.getSrc(), hdr.version(), msg.getRawBuffer(), msg.getOffset(), msg.getLength());
                 break;
+            case EncryptHeader.FETCH_SHARED_KEY:
+                down_prot.down(new Event(Event.FETCH_SECRET_KEY, msg.getSrc()));
+                break;
         }
         return null;
+    }
+
+    /**
+     * Processes a message with a GMS header (e.g. by adding the secret key to a JOIN response) and returns true if
+     * the message should be passed down (not encrypted) or false if the message needs to be encrypted
+     * @return Processing {@link Processing#DROP} if the message needs to be dropped, {@link Processing#SKIP} if the
+     *           message needs to be skipped (not encrypted), or {@link Processing#PROCESS} if the message needs to be
+     *           processed (= encrypted)
+     */
+    protected Processing skipDownMessage(Message msg) {
+        GMS.GmsHeader hdr=msg.getHeader(GMS_ID);
+        if(hdr == null)
+            return Processing.PROCESS;
+        switch(hdr.getType()) {
+            case GMS.GmsHeader.JOIN_REQ:
+            case GMS.GmsHeader.JOIN_REQ_WITH_STATE_TRANSFER:
+                if(!use_external_key_exchange) {
+                    // attach our public key to the JOIN-REQ
+                    EncryptHeader h=new EncryptHeader(EncryptHeader.PUB_KEY, symVersion())
+                      .key(key_pair.getPublic().getEncoded());
+                    msg.putHeader(this.id, h);
+                }
+                return Processing.SKIP;
+            case GMS.GmsHeader.JOIN_RSP:
+                if(use_external_key_exchange) {
+                    // send a FETCH_SHARED_KEY unicast to the joiner; this causes the joiner to fetch and install the
+                    // shared key *before* delivering the JOIN_RSP (so it can decrypt it)
+                    log.trace("%s: asking %s to fetch the shared group key %s via an external key exchange protocol",
+                              local_addr, msg.getDest(), Util.byteArrayToHexString(sym_version));
+                    down_prot.down(new Message(msg.getDest())
+                                     .putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion())));
+                    break;
+                }
+                // add the shared group key, encrypted with the destination's public key (should be in pub_map)
+                byte[] pk=pub_map.get(msg.getDest());
+                if(pk == null) {
+                    log.error("%s: public key (to encrypted shared group key) for %s not found in pub-map",
+                              local_addr, msg.dest());
+                    break;
+                }
+                try {
+                    Message encrypted_msg=encrypt(msg);
+                    byte[] encryptedKey=encryptSecretKey(secret_key, makePublicKey(pk));
+                    EncryptHeader eh=encrypted_msg.getHeader(id);
+                    eh.key(encryptedKey);
+                    log.debug("%s: sending encrypted group key to %s (version: %s)",
+                              local_addr, encrypted_msg.getDest(), Util.byteArrayToHexString(sym_version));
+                    down_prot.down(encrypted_msg);
+                    sendPublicKeys(msg.getDest()); // send a PUB_KEY message to the joiner
+                    return Processing.DROP; // the encrypted msg was already sent; no need to send the un-encrypted msg
+                }
+                catch(Exception e) {
+                    log.warn("%s: unable to send message down: %s", local_addr, e);
+                    return Processing.PROCESS;
+                }
+            case GMS.GmsHeader.MERGE_REQ:
+            case GMS.GmsHeader.MERGE_RSP:
+            case GMS.GmsHeader.VIEW_ACK:
+            case GMS.GmsHeader.GET_DIGEST_REQ:
+            case GMS.GmsHeader.GET_DIGEST_RSP:
+                return Processing.SKIP;
+        }
+        return Processing.PROCESS;
+    }
+
+    /** Checks if the message contains a public key (and adds it to pub_map if present) or an encrypted group key
+     * (and installs it if present) */
+    protected boolean skipUpMessage(Message msg) {
+        GMS.GmsHeader hdr=msg.getHeader(GMS_ID);
+        if(hdr == null)
+            return false;
+
+        EncryptHeader h=msg.getHeader(id);
+        switch(hdr.getType()) {
+            case GMS.GmsHeader.JOIN_REQ:
+            case GMS.GmsHeader.JOIN_REQ_WITH_STATE_TRANSFER: // get the public key from the JOIN-REQ
+                if(h != null && h.key() != null) {
+                    pub_map.put(msg.src(), h.key());
+                    sendPublicKeys(null); // multicast PUB_KEY message to other members (*exclude self*!)
+                }
+                return true;
+            case GMS.GmsHeader.JOIN_RSP:
+                if(h != null && h.key() != null)
+                    handleSharedGroupKeyResponse(msg.getSrc(), h.version(), h.key());
+                break;
+            case GMS.GmsHeader.MERGE_REQ:
+            case GMS.GmsHeader.MERGE_RSP:
+            case GMS.GmsHeader.VIEW_ACK:
+            case GMS.GmsHeader.GET_DIGEST_REQ:
+            case GMS.GmsHeader.GET_DIGEST_RSP:
+                return true;
+        }
+        return false;
+    }
+
+    protected boolean bypass(Message msg, boolean up) {
+        List<BiPredicate<Message,Boolean>> tmp=bypassers;
+        if(tmp == null)
+            return false;
+        for(BiPredicate<Message,Boolean> pred: tmp) {
+            if(pred.test(msg, up))
+                return true;
+        }
+        return false;
     }
 
 
@@ -382,19 +387,21 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         }
     }
 
+    /** Reads the encrypted shared group keys from the buffer, then picks the one for this member, decrypts
+     * it with the public key and installs it */
     protected void handleSharedGroupKeyResponse(Address sender, byte[] version, byte[] buf, int offset, int length) {
         if(!inView(sender, "ignoring shared group key sent by %s which is not in current view %s"))
             return;
 
         if(Arrays.equals(sym_version, version)) {
-            log.debug("%s: secret key (version %s) already installed, ignoring key response from %s",
+            log.debug("%s: group key (version %s) already installed, ignoring key response from %s",
                       local_addr, Util.byteArrayToHexString(version), sender);
             return;
         }
         Map<Address,byte[]> shared_keys=unserializeKeys(sender, buf, offset, length);
         byte[] encrypted_key=shared_keys != null? shared_keys.get(local_addr) : null;
         if(encrypted_key == null) {
-            log.warn("%s: found no encrypted shared group key for me in map, cannot install new secret key", local_addr);
+            log.warn("%s: found no encrypted shared group key for me in map, cannot install new group key", local_addr);
             return;
         }
         try {
@@ -497,7 +504,17 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                     log.debug("%s: I'm the new key server", local_addr);
                 if(create_new_key) {
                     createNewKey();
-                    if(left_mbrs) // multicast an INSTALL_SHARED_KEY message to all members (delivered before the view message)
+                    if(!left_mbrs)
+                        return;
+                    if(use_external_key_exchange) {
+                        // multicast a FETCH_SHARED_KEY unicast to all members; this causes the members to fetch and
+                        // install the new shared key *before* delivering the VIEW (so they can decrypt it)
+                        log.trace("%s: asking all members to fetch the shared key %s via an external key exchange protocol",
+                                  local_addr, Util.byteArrayToHexString(sym_version));
+                        down_prot.down(new Message(null).setTransientFlag(Message.TransientFlag.DONT_LOOPBACK)
+                                         .putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion())));
+                    }
+                    else // multicast an INSTALL_SHARED_KEY message to all members (delivered before the view message)
                         sendSharedGroupKeys(null);
                 }
             }
@@ -509,11 +526,11 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         try {
             this.secret_key=createSecretKey();
             initSymCiphers(sym_algorithm, secret_key);
-            log.debug("%s: created new secret key (version: %s)", local_addr, Util.byteArrayToHexString(sym_version));
+            log.debug("%s: created new group key (version: %s)", local_addr, Util.byteArrayToHexString(sym_version));
             cacheGroupKey(sym_version);
         }
         catch(Exception ex) {
-            log.error("%s: failed creating secret key and initializing ciphers", local_addr, ex);
+            log.error("%s: failed creating group key and initializing ciphers", local_addr, ex);
         }
     }
 
@@ -598,4 +615,5 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         return pubKey;
     }
 
+    protected enum Processing {SKIP, PROCESS, DROP}
 }

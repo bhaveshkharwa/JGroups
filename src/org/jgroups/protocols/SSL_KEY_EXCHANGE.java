@@ -1,12 +1,11 @@
 package org.jgroups.protocols;
 
-import org.jgroups.Address;
-import org.jgroups.Event;
-import org.jgroups.Global;
-import org.jgroups.View;
+import org.jgroups.*;
 import org.jgroups.annotations.LocalAddress;
 import org.jgroups.annotations.MBean;
 import org.jgroups.annotations.Property;
+import org.jgroups.conf.ClassConfigurator;
+import org.jgroups.protocols.pbcast.GMS;
 import org.jgroups.stack.IpAddress;
 import org.jgroups.util.Runner;
 import org.jgroups.util.Tuple;
@@ -40,6 +39,7 @@ import java.util.Objects;
   "(key server) to fetch a shared secret group key from the key server. That shared (symmetric) key is subsequently " +
   "used to encrypt communication between cluster members")
 public class SSL_KEY_EXCHANGE extends KeyExchange {
+    protected static final short GMS_ID=ClassConfigurator.getProtocolId(GMS.class);
 
     protected enum Type {
         SECRET_KEY_REQ,
@@ -125,7 +125,7 @@ public class SSL_KEY_EXCHANGE extends KeyExchange {
         if(asym_encrypt != null) {
             String sym_alg=asym_encrypt.symAlgorithm();
             if(!Util.match(sym_alg, secret_key_algorithm)) {
-                log.warn("overriding %s=%s to %s from %s", "secret_key_algorithm", secret_key_algorithm,
+                log.warn("%s: overriding %s=%s to %s from %s", "secret_key_algorithm", local_addr, secret_key_algorithm,
                          sym_alg, ASYM_ENCRYPT.class.getSimpleName());
                 secret_key_algorithm=sym_alg;
             }
@@ -156,16 +156,24 @@ public class SSL_KEY_EXCHANGE extends KeyExchange {
 
     public void stop() {
         super.stop();
-        if(srv_sock_handler != null) {
-            srv_sock_handler.stop(); // should also close srv_sock
-            srv_sock_handler=null;
-            Util.close(srv_sock);  // not needed, but second line of defense
-            srv_sock=null;
-        }
+        stopKeyserver();
     }
 
     public void destroy() {
         super.destroy();
+    }
+
+    public Object down(Event evt) {
+        if(evt.type() == Event.DISCONNECT)
+            stopKeyserver();
+        return super.down(evt);
+    }
+
+    public Object down(Message msg) {
+        GMS.GmsHeader gms_hdr=msg.getHeader(GMS_ID);
+        if(gms_hdr != null && gms_hdr.getType() == GMS.GmsHeader.LEAVE_REQ)
+            stopKeyserver();
+        return super.down(msg);
     }
 
     @SuppressWarnings("unchecked")
@@ -266,7 +274,7 @@ public class SSL_KEY_EXCHANGE extends KeyExchange {
             out.write(secret_key);
         }
         catch(Throwable t) {
-            log.trace("failure handling client socket", t);
+            log.trace("%s: failure handling client socket: %s", local_addr, t.getMessage());
         }
     }
 
@@ -278,19 +286,19 @@ public class SSL_KEY_EXCHANGE extends KeyExchange {
             srv_sock_handler=new Runner(getThreadFactory(), SSL_KEY_EXCHANGE.class.getSimpleName() + "-runner",
                                         this::accept, () -> Util.close(srv_sock));
             srv_sock_handler.start();
-            log.debug("SSL server socket listening on %s", srv_sock.getLocalSocketAddress());
+            log.debug("%s: SSL server socket listening on %s", local_addr, srv_sock.getLocalSocketAddress());
         }
     }
 
     protected synchronized void stopKeyserver() {
+        if(srv_sock != null) {
+            Util.close(srv_sock); // should not be necessary (check)
+            srv_sock=null;
+        }
         if(srv_sock_handler != null) {
             log.debug("%s: ceasing to be the keyserver; closing the server socket", local_addr);
             srv_sock_handler.stop();
             srv_sock_handler=null;
-        }
-        if(srv_sock != null) {
-            Util.close(srv_sock); // should not be necessary (check)
-            srv_sock=null;
         }
     }
 

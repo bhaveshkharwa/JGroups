@@ -81,6 +81,7 @@ A sends the JOIN-RSP to E
     - Send a PUB-KEY message to E containing all mappings between members and their public keys
 - Else
     - ASYM_ENCRYPT sends a FETCH-SHARED-KEY message (before the JOIN-RSP) to E
+- Pass the JOIN-RSP down, so it is sent to E
 
 
 E receives the JOIN-RSP from A
@@ -163,16 +164,27 @@ Members B and C receive V2
 - Clusters are V5={A,B,C} and V5={D,E,F}
 
 
+A and D send a MERGE-RSP
+------------------------
+- If !EX:
+    - A and D piggyback the public keys of all members of their subgroup with the MERGE-RSP
+
+
+On reception of a MERGE-RSP
+---------------------------
+- If the public keys are present (EX == false):
+    - Add the publick keys to pub-map
+
+
+
 New coord A unicasts INSTALL-MERGE-VIEW MergeView V6={A,B,C,D,E,F} to subgroup coords A and D
 ---------------------------------------------------------------------------------------------
 - If EX:
     - ASYM_ENCRYPT on (new coordinator) A unicasts a FETCH-SHARED-KEY message to the subgroup coords A and D
         - On reception, A and D multicast the FETCH-SHARED-KEY message to their respective subgroups
 - Else
-    - D sends (unicast) SEND-PUB-KEY messages to each of B,C,D,E,F (see [1])
-    - Wait until we have the public keys of all members of V6
-    - Create a map of all members, grab their public keys from pub-map, and add the SGK encrypted with the respective
-      member's public key.
+    - Create a map of all members, grab their public keys from pub-map (public keys were sent with the MEGE-RSPs),
+      and add the SGK encrypted with the respective member's public key.
     - A (unicast) INSTALL-SHARED-KEY message with the above map as payload is sent to each of the subgroup coordinators
       (A and D). On reception, A and D multicast the INSTALL_SHARED_KEY message to their subgroups
 - The MERGE-VIEW message is unicast to the subgroup coord A and D

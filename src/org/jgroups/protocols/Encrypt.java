@@ -167,8 +167,18 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
     }
 
     public Object up(Message msg) {
+        EncryptHeader hdr=msg.getHeader(this.id);
+        if(hdr == null) {
+            log.error("%s: received message without encrypt header from %s; dropping it", local_addr, msg.src());
+            return null;
+        }
         try {
-            return handleUpMessage(msg);
+            switch(hdr.type()) {
+                case EncryptHeader.ENCRYPT:
+                    return handleEncryptedMessage(msg);
+                default:
+                    return handleUpEvent(msg,hdr);
+            }
         }
         catch(Exception e) {
             log.warn("%s: exception occurred decrypting message", local_addr, e);
@@ -205,7 +215,6 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
     }
 
 
-
     /** Initialises the ciphers for both encryption and decryption using the generated or supplied secret key */
     protected void initSymCiphers(String algorithm, Key secret) throws Exception {
         if(secret == null)
@@ -233,21 +242,6 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
           Cipher.getInstance(algorithm, provider) : Cipher.getInstance(algorithm);
         cipher.init(mode, secret_key);
         return cipher;
-    }
-
-
-    protected Object handleUpMessage(Message msg) throws Exception {
-        EncryptHeader hdr=msg.getHeader(this.id);
-        if(hdr == null) {
-            log.error("%s: received message without encrypt header from %s; dropping it", local_addr, msg.src());
-            return null;
-        }
-        switch(hdr.type()) {
-            case EncryptHeader.ENCRYPT:
-                return handleEncryptedMessage(msg);
-            default:
-                return handleUpEvent(msg,hdr);
-        }
     }
 
 
@@ -282,6 +276,9 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
     protected Message decryptMessage(Cipher cipher, Message msg) throws Exception {
         EncryptHeader hdr=msg.getHeader(this.id);
         if(!Arrays.equals(hdr.version(), sym_version)) {
+            if(!inView(msg.src(),
+                       String.format("%s: rejected decryption of message from non-member %s", local_addr, msg.getSrc())))
+                return null;
             cipher=key_map.get(new AsciiString(hdr.version()));
             if(cipher == null) {
                 log.trace("%s: message with version %s dropped, as a cipher matching that version wasn't found " +

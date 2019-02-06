@@ -180,7 +180,9 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
         c.getProtocolStack().removeProtocol(NAKACK2.class); // to prevent A and B from discarding C as non-member
 
         Util.sleep(1000); // give members time to handle the new view
-        c.send(null, "hello world from left member C!");
+        c.send(null, "hello from left member C!");
+        c.send(a.getAddress(), "hello from C");
+        c.send(b.getAddress(), "hello from C");
         for(int i=0; i < 10; i++) {
             if(ra.size() > 0 || rb.size() > 0)
                 break;
@@ -265,7 +267,7 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
         JChannel ch=new JChannel(Util.getTestStack()).name(name);
         ProtocolStack stack=ch.getProtocolStack();
         Encrypt encrypt=createENCRYPT();
-        stack.insertProtocol(encrypt, ProtocolStack.Position.BELOW, NAKACK2.class);
+        stack.insertProtocol(encrypt, ProtocolStack.Position.BELOW, GMS.class);
         AUTH auth=new AUTH().setAuthCoord(true).setAuthToken(new MD5Token("mysecret")); // .setAuthCoord(false);
         stack.insertProtocol(auth, ProtocolStack.Position.BELOW, GMS.class);
         stack.findProtocol(GMS.class).setValue("join_timeout", 2000); // .setValue("view_ack_collection_timeout", 10);

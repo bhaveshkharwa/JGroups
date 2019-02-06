@@ -89,7 +89,7 @@ public class ASYM_ENCRYPT_LeaveTest {
           new STABLE(),
           new ASYM_ENCRYPT().setUseExternalKeyExchange(false).setChangeKeyOnLeave(true)
             .symKeylength(128).symAlgorithm("AES").asymKeylength(512).asymAlgorithm("RSA"),
-          new GMS().joinTimeout(1000).leaveTimeout(10000))
+          new GMS().joinTimeout(2000).leaveTimeout(10000))
           .name(name);
     }
 

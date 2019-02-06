@@ -640,7 +640,7 @@ public class GMS extends Protocol implements DiagnosticsHandler.ProbeHandler {
 
     protected void sendJoinResponse(Buffer marshalled_rsp, Address dest) {
         Message m=new Message(dest, marshalled_rsp).putHeader(this.id, new GmsHeader(GmsHeader.JOIN_RSP))
-          .setFlag(OOB, INTERNAL);
+          .setFlag(INTERNAL);
         getDownProtocol().down(m);
     }
 
@@ -1078,11 +1078,7 @@ public class GMS extends Protocol implements DiagnosticsHandler.ProbeHandler {
 
             case Event.DISCONNECT:
                 impl.leave(evt.getArg());
-                //if(!(impl instanceof CoordGmsImpl)) {
-                  //  initState(); // in case connect() is called again
-               // }
-                down_prot.down(evt); // notify the other protocols, but ignore the result
-                return null;
+                return down_prot.down(evt); // notify the other protocols, but ignore the result
 
             case Event.CONFIG :
                Map<String,Object> config=evt.getArg();
