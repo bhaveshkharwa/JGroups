@@ -387,6 +387,71 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         }
     }
 
+    /** Serializes all public keys and their corresponding encrypted shared group keys into a buffer */
+    protected Buffer serializeKeys(ByteArrayDataOutputStream out, boolean serialize_public_keys,
+                                   boolean serialize_shared_keys, Address serialize_only) throws Exception {
+        out.writeInt(0); // number of entries (actual value is written after serialization)
+        int num=0;
+        for(Map.Entry<Address,byte[]> e: pub_map.entrySet()) {
+            Address mbr=e.getKey();
+            byte[] public_key=e.getValue(); // the encoded public key
+            Util.writeAddress(mbr, out);
+            if(serialize_public_keys) {
+                out.writeInt(public_key.length);
+                out.write(public_key, 0, public_key.length);
+            }
+            else
+                out.writeInt(0);
+
+            if(serialize_shared_keys || Objects.equals(local_addr, serialize_only)) {
+                PublicKey pk=makePublicKey(public_key);
+                byte[] encrypted_shared_key=encryptSecretKey(secret_key, pk); // the encrypted shared group key
+                out.writeInt(encrypted_shared_key.length);
+                out.write(encrypted_shared_key, 0, encrypted_shared_key.length);
+            }
+            else
+                out.writeInt(0);
+            num++;
+        }
+        int curr_pos=out.position();
+        out.position(0).writeInt(num);
+        out.position(curr_pos);
+        return out.getBuffer();
+    }
+
+    /** Unserializes public keys and installs them to pub_map, then reads encrypted shared keys and install our own */
+    protected void unserializeAndInstallKeys(Address sender, byte[] version, ByteArrayDataInputStream in) {
+        try {
+            int num_keys=in.readInt();
+            for(int i=0; i < num_keys; i++) {
+                Address mbr=Util.readAddress(in);
+                int len=in.readInt();
+                if(len > 0) {
+                    byte[] public_key=new byte[len];
+                    in.readFully(public_key, 0, public_key.length);
+                    pub_map.put(mbr, public_key);
+                }
+                if((len=in.read()) > 0) {
+                    byte[] encrypted_shared_group_key=new byte[len];
+                    in.readFully(encrypted_shared_group_key, 0, encrypted_shared_group_key.length);
+                    if(local_addr.equals(mbr)) {
+                        try {
+                            SecretKey tmp=decodeKey(encrypted_shared_group_key);
+                            if(tmp != null)
+                                installSharedGroupKey(sender, tmp, version); // otherwise set the received key as the shared key
+                        }
+                        catch(Exception e) {
+                            log.warn("%s: unable to process key received from %s: %s", local_addr, sender, e);
+                        }
+                    }
+                }
+            }
+        }
+        catch(Exception ex) {
+            log.error("%s: failed reading keys received from %s: %s", local_addr, sender, ex);
+        }
+    }
+
     /** Reads the encrypted shared group keys from the buffer, then picks the one for this member, decrypts
      * it with the public key and installs it */
     protected void handleSharedGroupKeyResponse(Address sender, byte[] version, byte[] buf, int offset, int length) {
