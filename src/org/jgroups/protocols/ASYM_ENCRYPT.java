@@ -280,8 +280,10 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                     processEncryptMessage(msg, h);
                 return true;
             case GMS.GmsHeader.JOIN_RSP:
-                if(h != null && h.key() != null)
-                    handleSharedGroupKeyResponse(msg.getSrc(), h.version(), h.key());
+                if(h != null)
+                    processEncryptMessage(msg, h);
+                //if(h != null && h.key() != null)
+                 //   handleSharedGroupKeyResponse(msg.getSrc(), h.version(), h.key());
                 break;
             case GMS.GmsHeader.MERGE_REQ:
             case GMS.GmsHeader.MERGE_RSP:

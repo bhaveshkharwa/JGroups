@@ -173,12 +173,7 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
             return null;
         }
         try {
-            switch(hdr.type()) {
-                case EncryptHeader.ENCRYPT:
-                    return handleEncryptedMessage(msg);
-                default:
-                    return handleUpEvent(msg,hdr);
-            }
+            return handleEncryptedMessage(msg);
         }
         catch(Exception e) {
             log.warn("%s: exception occurred decrypting message", local_addr, e);
