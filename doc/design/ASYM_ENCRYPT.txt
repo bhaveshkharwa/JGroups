@@ -50,7 +50,7 @@ the new view (or join response) is decrypted. This eliminates the delays in view
 approach. It may also simplify the code.
 
 Piggy-backing on reliable messages, and not sending messages on its own, means that ASYM_ENCRYPT can be placed somewhere
-_below_ the reliable protocols (UNICAST3, NAKACK2), and that sequence number replay [4] cannot happen (if SERIALIZABLE
+_below_ the reliable protocols (UNICAST3, NAKACK2), and that sequence number replay [2] cannot happen (if SERIALIZABLE
 is placed on top of ASYM_ENCRYPT).
 
 The design below describes both external (SSL_KEY_EXCHANGE) and internal (SGK encrypted by recipient's public key)
@@ -102,12 +102,12 @@ E receives the JOIN-RSP from A
 - If the header is
     - INSTALL-KEYS:
         - Get all public keys from the payload and add them to pub-map
-        - Get the encrypted SGK for E from the JOIN-RSP, decrypt it with E's private key and install it
+        - Get the encrypted SGK for E from the message, decrypt it with E's private key and install it
     - FETCH-SHARED-KEY:
         - E asks its KEY_EXCHANGE protocol to fetch the SGK
         - E *blocks* until the SGK has been retrieved and installed. This prevents the delivery of the JOIN-RSP
           until the SGK has been installed. This means that the JOIN-RSP will have a valid SGK in place to decrypt it.
-- Pass the JOIN-RSP up (this will install the first view)
+- Pass the message up (this will install the first view)
 
 
 
@@ -154,15 +154,7 @@ B and C receive an INSTALL-SHARED-KEY message from A
 On reception of a VIEW
 ----------------------
 - Remove all mappings from pub-map whose members are not in the view
-- If the header is
-    - INSTALL-KEYS:
-        - Get all public keys from the payload and add them to pub-map
-        - Get the encrypted SGK for this member from the JOIN-RSP, decrypt it with the private key and install it
-    - FETCH-SHARED-KEY:
-        - Ask the KEY_EXCHANGE protocol to fetch the SGK
-        - This *blocks* until the SGK has been retrieved and installed. This prevents the delivery of the JOIN-RSP
-          until the SGK has been installed. This means that the JOIN-RSP will have a valid SGK in place to decrypt it.
-- Pass the VIEW up
+- (Same processing as for reception of JOIN-RSP)
 
 
 
@@ -205,35 +197,14 @@ Misc
   members of a MergeView: unicast messages can be delivered to members outside the current view.
 
 
-[2] ASYM_ENCRYPT must be located *below* GMS but *above* NAKACK2/UNICAST3
--------------------------------------------------------------------------
-- The reason for below GMS is that ASYM_ENCRYPT has to intercept JOIN-REQ/JOIN-RSP and view installations
-- The reason for above NAKACK2/UNICAST3 is that some messages need to be reliable (PUB-KEY) and others require
-  ordering, e.g. the INSTALL-SHARED-KEY multicast needs to be delivered *before* the new VIEW
-
-  ====> This is NOT TRUE anymore: todo: change
-
-
-[3] Ordering between unicast and multicast messages on a merge
---------------------------------------------------------------
-- The INSTALL-SHARED-KEY and MERGE-VIEW messages are unicast by A to {A,D}
-- This means that both A and D will deliver INSTALL-SHARED-KEY *before* MERGE-VIEW as unicasts from the same
-  member are ordered in send-order of A
-- The delivery of unicast INSTALL-SHARED-KEY in A and D triggers a multicast INSTALL-SHARED-KEY to the respective subgroups
-- The delivery of unicast MERGE-VIEW in A and D triggers a multicast MERGE-VIEW to the respective subgroups
-- Because the unicast INSTALL-SHARED-KEY and MERGE-VIEW messages are delivered in order, this also guarantees the
-  ordering between the multicast INSTALL-SHARED-KEY and MERGE-VIEW messages: the former will be delivered before the
-  latter. This ensures that each member of all subgroups will have the new shared group key install before receicing the
-  merge view, and can therefore decrypt it.
-
-[4] Sequence number replay
+[2] Sequence number replay
 --------------------------
 - When a rogue member captures an encrypted message, it can resend it, but with a different sequence number. (Resending
   the same message would cause UNICAST3 or NAKACK2 to drop the message, as it has already been delivered.) However, if
   the rogue member increases the seqno by 1, it may be able to resend the same message a if it was a new message.
   See unit test ASYM_ENCRYPT_Test.testCapturingOfMessageByNonMemberAndResending().
 
-[5] Copying a message
+[3] Copying a message
 ---------------------
 - This is needed to prevent _retransmission_ from sending the _modified_ message and the code modifying the message
   again
@@ -247,7 +218,7 @@ Misc
     was chosen, mainly because of its simplicity.
 
 
-[6] Use of second FRAG2 below ASYM_ENCRYPT
+[4] Use of second FRAG2 below ASYM_ENCRYPT
 ------------------------------------------
 - If !EX, the public keys and encrypted SGKs of all members are add to the payload of JOIN-RSP and VIEW messages
 - For large clusters, this may increase the size of messages such that they become too big to be sent (e.g. UDP has

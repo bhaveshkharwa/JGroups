@@ -14,7 +14,7 @@ import java.util.function.Supplier;
  */
 public class EncryptHeader extends Header {
     public static final byte ENCRYPT            = 1;
-    public static final byte PUB_KEY            = 2; // body of the message contains the mappings
+    public static final byte INSTALL_KEYS       = 2; // body of the message contains public and/or shared keys
     public static final byte INSTALL_SHARED_KEY = 3; // body of the message contains the encrypted shared keys
     public static final byte FETCH_SHARED_KEY   = 4; // the receiver fetches the shared key via an external key exchange
 
@@ -61,7 +61,7 @@ public class EncryptHeader extends Header {
     protected static String typeToString(byte type) {
         switch(type) {
             case ENCRYPT:            return "ENCRYPT";
-            case PUB_KEY:            return "PUB_KEY";
+            case INSTALL_KEYS:       return "INSTALL_KEYS";
             case INSTALL_SHARED_KEY: return "INSTALL_SHARED_KEY";
             case FETCH_SHARED_KEY:   return "FETCH_SHARED_KEY";
             default:                 return "<unrecognized type " + type;
