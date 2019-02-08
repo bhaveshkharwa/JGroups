@@ -170,10 +170,9 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
     /** Tests that when {ABC} -> {AB}, neither A nor B can receive a message from non-member C */
     public void testMessagesByLeftMember() throws Exception {
         View view=View.create(a.getAddress(), a.getView().getViewId().getId()+1, a.getAddress(),b.getAddress());
-        Stream.of(a,b).forEach(ch -> {
-            GMS gms=ch.getProtocolStack().findProtocol(GMS.class);
-            gms.installView(view);
-        });
+        GMS gms_a=a.getProtocolStack().findProtocol(GMS.class);
+        gms_a.castViewChangeAndSendJoinRsps(view, null, Collections.singletonList(b.getAddress()), null, null);
+
         Stream.of(a,b).forEach(ch -> System.out.printf("%s: %s\n", ch.getAddress(), ch.getView()));
         System.out.printf("%s: %s\n", c.getAddress(), c.getView());
 
@@ -196,16 +195,14 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
     public void testEavesdroppingByLeftMember() throws Exception {
         printSymVersion(a,b,c);
         View view=View.create(a.getAddress(), a.getView().getViewId().getId()+1, a.getAddress(),b.getAddress());
-        Stream.of(a,b).forEach(ch -> {
-            GMS gms=ch.getProtocolStack().findProtocol(GMS.class);
-            gms.installView(view);
-        });
+        GMS gms_a=a.getProtocolStack().findProtocol(GMS.class);
+        gms_a.castViewChangeAndSendJoinRsps(view, null, Collections.singletonList(b.getAddress()), null, null);
+
         Stream.of(a,b).forEach(ch -> System.out.printf("%s: %s\n", ch.getAddress(), ch.getView()));
         System.out.printf("%s: %s\n", c.getAddress(), c.getView());
         c.getProtocolStack().removeProtocol(NAKACK2.class); // to prevent A and B from discarding C as non-member
 
         Util.sleep(2000); // give members time to handle the new view
-
 
         printSymVersion(a,b,c);
         a.send(null, "hello from A");
@@ -267,7 +264,7 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
         JChannel ch=new JChannel(Util.getTestStack()).name(name);
         ProtocolStack stack=ch.getProtocolStack();
         Encrypt encrypt=createENCRYPT();
-        stack.insertProtocol(encrypt, ProtocolStack.Position.BELOW, GMS.class);
+        stack.insertProtocol(encrypt, ProtocolStack.Position.BELOW, NAKACK2.class);
         AUTH auth=new AUTH().setAuthCoord(true).setAuthToken(new MD5Token("mysecret")); // .setAuthCoord(false);
         stack.insertProtocol(auth, ProtocolStack.Position.BELOW, GMS.class);
         stack.findProtocol(GMS.class).setValue("join_timeout", 2000); // .setValue("view_ack_collection_timeout", 10);
