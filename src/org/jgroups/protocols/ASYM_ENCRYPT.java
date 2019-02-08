@@ -208,45 +208,46 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                 }
                 return Processing.SKIP;
             case GMS.GmsHeader.JOIN_RSP:
-                if(use_external_key_exchange) {
-                    // send a FETCH_SHARED_KEY unicast to the joiner; this causes the joiner to fetch and install the
-                    // shared key *before* delivering the JOIN_RSP (so it can decrypt it)
-                    log.trace("%s: asking %s to fetch the shared group key %s via an external key exchange protocol",
-                              local_addr, msg.getDest(), Util.byteArrayToHexString(sym_version));
-                    // not an issue to *not* copy msg; as the header will be added every time, also on retransmissions
-                    msg.putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion()));
-                    break;
-                }
-                // add the shared group key, encrypted with the destination's public key (should be in pub_map)
-                byte[] pk=pub_map.get(msg.getDest());
-                if(pk == null) {
-                    log.error("%s: public key (to encrypted shared group key) for %s not found in pub-map",
-                              local_addr, msg.dest());
-                    break;
-                }
                 try {
                     Message encrypted_msg=encrypt(msg); // already a copy
-                    encrypted_msg=addKeysToMessage(encrypted_msg, false, true, false, msg.getDest());
-                    log.debug("%s: sending encrypted group key to %s (version: %s)",
-                              local_addr, encrypted_msg.getDest(), Util.byteArrayToHexString(sym_version));
+                    if(use_external_key_exchange) {
+                        // attach a FETCH_SHARED_KEY to the JOIN_RSP; this causes the joiner to fetch and install the
+                        // shared key *before* delivering the JOIN_RSP (so it can decrypt it)
+                        log.trace("%s: asking %s to fetch the shared group key %s via an external key exchange protocol",
+                                  local_addr, msg.getDest(), Util.byteArrayToHexString(sym_version));
+                        encrypted_msg.putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion()));
+                    }
+                    else {
+                        // add the shared group key, encrypted with the destination's public key (should be in pub_map)
+                        byte[] pk=pub_map.get(msg.getDest());
+                        if(pk == null) {
+                            log.error("%s: public key (to encrypted shared group key) for %s not found in pub-map",
+                                      local_addr, msg.dest());
+                            break;
+                        }
+                        encrypted_msg=addKeysToMessage(encrypted_msg, false, true, false, msg.getDest());
+                        log.debug("%s: sending encrypted group key to %s (version: %s)",
+                                  local_addr, encrypted_msg.getDest(), Util.byteArrayToHexString(sym_version));
+                    }
                     down_prot.down(encrypted_msg);
-                    return Processing.DROP; // the encrypted msg was already sent; no need to send the un-encrypted msg
+                    return Processing.DROP;
                 }
-                catch(Exception e) {
-                    log.warn("%s: unable to send message down: %s", local_addr, e);
+                catch(Exception ex) {
+                    log.warn("%s: unable to send message down", local_addr, getUseExternalKeyExchange());
                 }
                 break;
             case GMS.GmsHeader.VIEW:
-                if(use_external_key_exchange && send_keys) {
-                    // ask all members to fetch and install the new shared key *before* delivering
-                    // the view (so they can decrypt it)
-                    msg.putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion()));
-                    send_keys=false;
-                    break;
-                }
                 try {
                     Message encrypted_msg=encrypt(msg); // already a copy
-                    encrypted_msg=addKeysToMessage(encrypted_msg, false, true, send_keys, null);
+                    if(use_external_key_exchange) {
+                        if(send_keys) {
+                            // ask all members to fetch and install the new shared key *before* delivering
+                            // the view (so <></>hey can decrypt it)
+                            encrypted_msg.putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion()));
+                        }
+                    }
+                    else
+                        encrypted_msg=addKeysToMessage(encrypted_msg, false, true, send_keys, null);
                     send_keys=false;
                     down_prot.down(encrypted_msg);
                     return Processing.DROP; // the encrypted msg was already sent; no need to send the un-encrypted msg
