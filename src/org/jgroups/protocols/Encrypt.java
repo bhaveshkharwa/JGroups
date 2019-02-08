@@ -239,17 +239,14 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
         return cipher;
     }
 
-
+    // todo: I don't think decryptMessage() needs to copy the message as the sender already makes a copy!
+    // todo: test this!
     protected Object handleEncryptedMessage(Message msg) throws Exception {
         // decrypt the message; we need to copy msg as we modify its buffer (http://jira.jboss.com/jira/browse/JGRP-538)
         Message tmpMsg=decryptMessage(null, msg.copy()); // need to copy for possible xmits
         if(tmpMsg != null)
             return up_prot.up(tmpMsg);
         log.warn("%s: unrecognized cipher; discarding message from %s", local_addr, msg.src());
-        return null;
-    }
-
-    protected Object handleUpEvent(Message msg, EncryptHeader hdr) {
         return null;
     }
 
@@ -308,7 +305,7 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
     }
 
     protected Message encrypt(Message msg) throws Exception {
-        EncryptHeader hdr=new EncryptHeader(EncryptHeader.ENCRYPT, symVersion());
+        EncryptHeader hdr=new EncryptHeader(symVersion());
 
         // copy needed because same message (object) may be retransmitted -> prevent double encryption
         Message msgEncrypted=msg.copy(false).putHeader(this.id, hdr);
@@ -361,30 +358,22 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
         }
 
         public void accept(Message msg, MessageBatch batch) {
-            EncryptHeader hdr;
-            if((hdr=msg.getHeader(id)) == null) {
+            if(msg.getHeader(id) == null) {
                 log.error("%s: received message without encrypt header from %s; dropping it", local_addr, batch.sender());
                 batch.remove(msg); // remove from batch to prevent passing the message further up as part of the batch
                 return;
             }
-
-            if(hdr.type() == EncryptHeader.ENCRYPT) {
-                try {
-                    Message tmpMsg=decryptMessage(cipher, msg.copy()); // need to copy for possible xmits
-                    if(tmpMsg != null)
-                        batch.replace(msg, tmpMsg);
-                    else
-                        batch.remove(msg);
-                }
-                catch(Exception e) {
-                    log.error("%s: failed decrypting message from %s (offset=%d, length=%d, buf.length=%d): %s, headers are %s",
-                              local_addr, msg.getSrc(), msg.getOffset(), msg.getLength(), msg.getRawBuffer().length, e, msg.printHeaders());
+            try {
+                Message tmpMsg=decryptMessage(cipher, msg.copy()); // need to copy for possible xmits
+                if(tmpMsg != null)
+                    batch.replace(msg, tmpMsg);
+                else
                     batch.remove(msg);
-                }
             }
-            else {
-                batch.remove(msg); // a control message will get handled by ENCRYPT and should not be passed up
-                handleUpEvent(msg, hdr);
+            catch(Exception e) {
+                log.error("%s: failed decrypting message from %s (offset=%d, length=%d, buf.length=%d): %s, headers are %s",
+                          local_addr, msg.getSrc(), msg.getOffset(), msg.getLength(), msg.getRawBuffer().length, e, msg.printHeaders());
+                batch.remove(msg);
             }
         }
     }

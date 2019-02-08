@@ -57,6 +57,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
     protected boolean                              use_external_key_exchange;
 
     protected volatile Address                     key_server_addr;
+    protected volatile boolean                     send_keys;    // set by handleView()
     protected KeyPair                              key_pair;     // to store own's public/private Key
     protected Cipher                               asym_cipher;  // decrypting cypher for secret key requests
 
@@ -120,6 +121,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
     }
 
     public void init() throws Exception {
+        send_keys=false;
         initKeyPair();
         super.init();
         if(use_external_key_exchange) {
@@ -177,33 +179,12 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                 catch(Throwable t) {
                     log.error("failed passing up message from %s: %s, ex=%s", msg.src(), msg.printHeaders(), t);
                 }
-                continue;
-            }
-            EncryptHeader eh=msg.getHeader(this.id);
-            if(eh != null && eh.type != EncryptHeader.ENCRYPT) {
-                handleUpEvent(msg, eh);
-                batch.remove(msg);
             }
         }
         if(!batch.isEmpty())
             super.up(batch); // decrypt the rest of the messages in the batch (if any)
     }
 
-
-    @Override protected Object handleUpEvent(Message msg, EncryptHeader hdr) {
-        switch(hdr.type()) {
-            //case EncryptHeader.PUB_KEY:
-              //  installPublicKeys(msg.getSrc(), msg.getRawBuffer(), msg.getOffset(), msg.getLength());
-                // break;
-            case EncryptHeader.INSTALL_SHARED_KEY:
-                handleSharedGroupKeyResponse(msg.getSrc(), hdr.version(), msg.getRawBuffer(), msg.getOffset(), msg.getLength());
-                break;
-            case EncryptHeader.FETCH_SHARED_KEY:
-                down_prot.down(new Event(Event.FETCH_SECRET_KEY, msg.getSrc()));
-                break;
-        }
-        return null;
-    }
 
     /**
      * Processes a message with a GMS header (e.g. by adding the secret key to a JOIN response) and returns true if
@@ -221,7 +202,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
             case GMS.GmsHeader.JOIN_REQ_WITH_STATE_TRANSFER:
                 if(!use_external_key_exchange) {
                     // attach our public key to the JOIN-REQ
-                    Message copy=addKeys(msg, true, true, false, null);
+                    Message copy=addKeysToMessage(msg, true, true, false, null);
                     down_prot.down(copy);
                     return Processing.DROP;
                 }
@@ -232,8 +213,8 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                     // shared key *before* delivering the JOIN_RSP (so it can decrypt it)
                     log.trace("%s: asking %s to fetch the shared group key %s via an external key exchange protocol",
                               local_addr, msg.getDest(), Util.byteArrayToHexString(sym_version));
-                    down_prot.down(new Message(msg.getDest())
-                                     .putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion())));
+                    // not an issue to *not* copy msg; as the header will be added every time, also on retransmissions
+                    msg.putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion()));
                     break;
                 }
                 // add the shared group key, encrypted with the destination's public key (should be in pub_map)
@@ -245,7 +226,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                 }
                 try {
                     Message encrypted_msg=encrypt(msg); // already a copy
-                    encrypted_msg=addKeys(encrypted_msg, false, true, false, msg.getDest());
+                    encrypted_msg=addKeysToMessage(encrypted_msg, false, true, false, msg.getDest());
                     log.debug("%s: sending encrypted group key to %s (version: %s)",
                               local_addr, encrypted_msg.getDest(), Util.byteArrayToHexString(sym_version));
                     down_prot.down(encrypted_msg);
@@ -253,8 +234,27 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                 }
                 catch(Exception e) {
                     log.warn("%s: unable to send message down: %s", local_addr, e);
-                    return Processing.PROCESS;
                 }
+                break;
+            case GMS.GmsHeader.VIEW:
+                if(use_external_key_exchange && send_keys) {
+                    // ask all members to fetch and install the new shared key *before* delivering
+                    // the view (so they can decrypt it)
+                    msg.putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion()));
+                    send_keys=false;
+                    break;
+                }
+                try {
+                    Message encrypted_msg=encrypt(msg); // already a copy
+                    encrypted_msg=addKeysToMessage(encrypted_msg, false, true, send_keys, null);
+                    send_keys=false;
+                    down_prot.down(encrypted_msg);
+                    return Processing.DROP; // the encrypted msg was already sent; no need to send the un-encrypted msg
+                }
+                catch(Exception e) {
+                    log.warn("%s: unable to send message down: %s", local_addr, e.getMessage());
+                }
+                break;
             case GMS.GmsHeader.MERGE_REQ:
             case GMS.GmsHeader.MERGE_RSP:
             case GMS.GmsHeader.VIEW_ACK:
@@ -280,10 +280,9 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                     processEncryptMessage(msg, h);
                 return true;
             case GMS.GmsHeader.JOIN_RSP:
+            case GMS.GmsHeader.VIEW:
                 if(h != null)
                     processEncryptMessage(msg, h);
-                //if(h != null && h.key() != null)
-                 //   handleSharedGroupKeyResponse(msg.getSrc(), h.version(), h.key());
                 break;
             case GMS.GmsHeader.MERGE_REQ:
             case GMS.GmsHeader.MERGE_RSP:
@@ -297,12 +296,11 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
 
     protected void processEncryptMessage(Message msg, EncryptHeader hdr) {
         switch(hdr.type) {
-            case EncryptHeader.ENCRYPT:
-                break;
             case EncryptHeader.INSTALL_KEYS:
-                removeAndInstallKeys(msg, hdr.version());
+                removeKeysFromMessageAndInstall(msg, hdr.version());
                 break;
             case EncryptHeader.FETCH_SHARED_KEY:
+                down_prot.down(new Event(Event.FETCH_SECRET_KEY, msg.getSrc()));
                 break;
         }
     }
@@ -357,38 +355,13 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
     }
 
 
-    /** Encrypt the shared group key with the public key of each member and send the encrypted keys as body of a msg */
-    protected void sendSharedGroupKeys(Address dest) {
-        try {
-            Map<Address,byte[]> encrypted_shared_keys=new HashMap<>(pub_map.size());
-            for(Map.Entry<Address,byte[]> e: pub_map.entrySet()) {
-                Address mbr=e.getKey();
-                byte[] encoded_pk=e.getValue();
-                PublicKey pk=makePublicKey(encoded_pk);
-                byte[] encrypted_shared_key=encryptSecretKey(secret_key, pk);
-                encrypted_shared_keys.put(mbr, encrypted_shared_key);
-            }
-            Buffer serialized_keys=serializeKeys(encrypted_shared_keys);
-            if(serialized_keys == null)
-                return;
-            log.trace("%s: sending %d encrypted shared group key(s) to %s (version: %s)",
-                      local_addr, pub_map.size(), dest == null? "all members" : dest, Util.byteArrayToHexString(sym_version));
-            Message msg=new Message(dest, serialized_keys).setTransientFlag(Message.TransientFlag.DONT_LOOPBACK)
-              .putHeader(id, new EncryptHeader(EncryptHeader.INSTALL_SHARED_KEY, symVersion()));
-            down_prot.down(msg);
-        }
-        catch(Exception ex) {
-            log.error("%s: failed writing shared group keys to message: %s", local_addr, ex);
-        }
-    }
-
     /**
      * Adds the public and/or encrypted shared keys to the payload of msg. If msg already has a payload, the message
      * will be copied and the new payload consists of the keys and the original payload
      * @param msg The original message
      * @return A copy of the message
      */
-    protected Message addKeys(Message msg, boolean copy, boolean add_public_keys, boolean add_secret_keys, Address serialize_only) {
+    protected Message addKeysToMessage(Message msg, boolean copy, boolean add_public_keys, boolean add_secret_keys, Address serialize_only) {
         ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(pub_map.size() * 200 + msg.getLength());
         try {
             serializeKeys(out, add_public_keys, add_secret_keys, serialize_only);
@@ -408,10 +381,11 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
      * (the original payload), the offset of the message will be changed. Otherwise, the payload will be nulled, to
      * re-create the original message
      */
-    protected void removeAndInstallKeys(Message msg, byte[] version) {
+    protected void removeKeysFromMessageAndInstall(Message msg, byte[] version) {
         ByteArrayDataInputStream in=new ByteArrayDataInputStream(msg.getRawBuffer(), msg.getOffset(), msg.getLength());
         unserializeAndInstallKeys(msg.getSrc(), version, in);
         int len=msg.getLength(), offset=msg.getOffset(), bytes_read=in.position();
+        // we can modify the original message as the sender sends a copy (even on retransmissions)
         if(offset + bytes_read == len)
             msg.setBuffer(null, 0, 0); // the original payload must have been null
         else
@@ -601,16 +575,13 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                     createNewKey();
                     if(!left_mbrs)
                         return;
-                    if(use_external_key_exchange) {
-                        // multicast a FETCH_SHARED_KEY unicast to all members; this causes the members to fetch and
-                        // install the new shared key *before* delivering the VIEW (so they can decrypt it)
+                    send_keys=true; // keys will be added to VIEW in down()
+                    if(use_external_key_exchange && send_keys)
                         log.trace("%s: asking all members to fetch the shared key %s via an external key exchange protocol",
                                   local_addr, Util.byteArrayToHexString(sym_version));
-                        down_prot.down(new Message(null).setTransientFlag(Message.TransientFlag.DONT_LOOPBACK)
-                                         .putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion())));
-                    }
-                    else // multicast an INSTALL_SHARED_KEY message to all members (delivered before the view message)
-                        sendSharedGroupKeys(null);
+                    else
+                        log.debug("%s: sending encrypted group keys to all members (version: %s)",
+                                  local_addr, Util.byteArrayToHexString(sym_version));
                 }
             }
         }

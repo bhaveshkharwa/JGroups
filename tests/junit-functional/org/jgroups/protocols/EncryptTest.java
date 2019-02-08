@@ -167,7 +167,7 @@ public abstract class EncryptTest {
         encrypt.init();
 
         short encrypt_id=ClassConfigurator.getProtocolId(SYM_ENCRYPT.class);
-        EncryptHeader hdr=new EncryptHeader(EncryptHeader.ENCRYPT, encrypt.symVersion());
+        EncryptHeader hdr=new EncryptHeader(encrypt.symVersion());
         Message msg=new Message(null).putHeader(encrypt_id, hdr);
 
         byte[] buf="hello from rogue".getBytes();

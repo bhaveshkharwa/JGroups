@@ -13,10 +13,8 @@ import java.util.function.Supplier;
  * @since  4.0
  */
 public class EncryptHeader extends Header {
-    public static final byte ENCRYPT            = 1;
-    public static final byte INSTALL_KEYS       = 2; // body of the message contains public and/or shared keys
-    public static final byte INSTALL_SHARED_KEY = 3; // body of the message contains the encrypted shared keys
-    public static final byte FETCH_SHARED_KEY   = 4; // the receiver fetches the shared key via an external key exchange
+    public static final byte INSTALL_KEYS       = 1; // body of the message contains public and/or shared keys
+    public static final byte FETCH_SHARED_KEY   = 2; // the receiver fetches the shared key via an external key exchange
 
     protected byte   type;
     protected byte[] version;
@@ -28,6 +26,10 @@ public class EncryptHeader extends Header {
 
     public EncryptHeader(byte type, byte[] version) {
         this.type=type;
+        this.version=version;
+    }
+
+    public EncryptHeader(byte[] version) {
         this.version=version;
     }
 
@@ -60,11 +62,9 @@ public class EncryptHeader extends Header {
 
     protected static String typeToString(byte type) {
         switch(type) {
-            case ENCRYPT:            return "ENCRYPT";
             case INSTALL_KEYS:       return "INSTALL_KEYS";
-            case INSTALL_SHARED_KEY: return "INSTALL_SHARED_KEY";
             case FETCH_SHARED_KEY:   return "FETCH_SHARED_KEY";
-            default:                 return "<unrecognized type " + type;
+            default:                 return EncryptHeader.class.getSimpleName();
         }
     }
 }
