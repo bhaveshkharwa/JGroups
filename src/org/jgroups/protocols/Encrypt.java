@@ -273,9 +273,9 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
                 return null;
             cipher=key_map.get(new AsciiString(hdr.version()));
             if(cipher == null) {
-                log.trace("%s: message with version %s dropped, as a cipher matching that version wasn't found " +
+                log.trace("%s: message from %s (version: %s) dropped, as a cipher matching that version wasn't found " +
                             "(current version: %s)",
-                          local_addr, Util.byteArrayToHexString(hdr.version()), Util.byteArrayToHexString(sym_version));
+                          local_addr, msg.src(), Util.byteArrayToHexString(hdr.version()), Util.byteArrayToHexString(sym_version));
                 return null;
             }
             log.trace("%s: decrypting msg from %s using previous cipher version %s",

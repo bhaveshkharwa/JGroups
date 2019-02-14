@@ -33,7 +33,7 @@ import java.util.stream.Stream;
  */
 @Test(enabled=false)
 public abstract class EncryptTest {
-    protected JChannel            a,b,c,rogue;
+    protected JChannel            a,b,c,d,rogue;
     protected MyReceiver<Message> ra, rb, rc, r_rogue;
     protected String              cluster_name;
     protected static final short  GMS_ID;
@@ -53,7 +53,7 @@ public abstract class EncryptTest {
         System.out.println("");
     }
 
-    @Test(enabled=false) protected void destroy() {Util.close(rogue, c, b, a);}
+    @Test(enabled=false) protected void destroy() {Util.close(rogue,d,c,b,a);}
 
     protected abstract JChannel create(String name) throws Exception;
 

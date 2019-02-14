@@ -15,8 +15,7 @@ import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-import java.util.Arrays;
-import java.util.Collections;
+import java.util.*;
 import java.util.stream.Stream;
 
 import static org.jgroups.util.Util.shutdown;
@@ -29,6 +28,8 @@ import static org.jgroups.util.Util.shutdown;
 @Test(groups=Global.FUNCTIONAL,singleThreaded=true)
 public class ASYM_ENCRYPT_Test extends EncryptTest {
     protected static final short  ASYM_ENCRYPT_ID;
+    protected static final String KEYSTORE="my-keystore.jks";
+    protected static final String KEYSTORE_PWD="password";
 
     static {
         ASYM_ENCRYPT_ID=ClassConfigurator.getProtocolId(ASYM_ENCRYPT.class);
@@ -173,10 +174,7 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
         GMS gms_a=a.getProtocolStack().findProtocol(GMS.class);
         gms_a.castViewChangeAndSendJoinRsps(view, null, Collections.singletonList(b.getAddress()), null, null);
 
-        Stream.of(a,b).forEach(ch -> System.out.printf("%s: %s\n", ch.getAddress(), ch.getView()));
-        System.out.printf("%s: %s\n", c.getAddress(), c.getView());
-
-        c.getProtocolStack().removeProtocol(NAKACK2.class); // to prevent A and B from discarding C as non-member
+        Stream.of(a,b,c).forEach(ch -> System.out.printf("%s: %s\n", ch.getAddress(), ch.getView()));
 
         Util.sleep(1000); // give members time to handle the new view
         c.send(null, "hello from left member C!");
@@ -187,8 +185,8 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
                 break;
             Util.sleep(500);
         }
-        assert ra.size() == 0 : String.format("A: received msgs from non-member C: %s", print(ra.list()));
-        assert rb.size() == 0 : String.format("B: received msgs from non-member C: %s", print(rb.list()));
+        assert ra.size() == 0 && rb.size() == 0: String.format("A and/or B: received msgs from non-member C: %s / %s",
+                                                               print(ra.list()), print(rb.list()));
     }
 
     /** Tests that a left member C cannot decrypt messages from the cluster */
@@ -225,12 +223,12 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
         Address crashed_coord=a.getAddress();
         shutdown(a);
 
-        System.out.printf("** Crashing %s **\n", crashed_coord);
+        //System.out.printf("** Crashing %s **\n", crashed_coord);
         GMS gms=b.getProtocolStack().findProtocol(GMS.class);
         gms.up(new Event(Event.SUSPECT, Collections.singletonList(crashed_coord)));
 
         Util.waitUntilAllChannelsHaveSameView(10000, 1000, b,c);
-        for(JChannel ch: Arrays.asList(a,b,c))
+        for(JChannel ch: Arrays.asList(b,c))
             System.out.printf("View for %s: %s\n", ch.getName(), ch.getView());
         for(JChannel ch: Arrays.asList(b,c)) {
             assert ch.getView().size() == 2;
@@ -260,6 +258,54 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
         }
     }
 
+    public void testMerge() throws Exception {
+        Util.close(rogue);
+        d=create("D");
+        d.connect(getClass().getSimpleName());
+        Util.waitUntilAllChannelsHaveSameView(10000, 1000, a,b,c,d);
+
+
+        /*for(JChannel ch: Arrays.asList(a,b)) {
+            ASYM_ENCRYPT asym=ch.getProtocolStack().findProtocol(ASYM_ENCRYPT.class);
+            asym.use_external_key_exchange=true;
+            SSL_KEY_EXCHANGE key_exchange=new SSL_KEY_EXCHANGE().setKeystoreName(KEYSTORE)
+              .setKeystorePassword(KEYSTORE_PWD).setPortRange(2);
+            ch.getProtocolStack().insertProtocolInStack(key_exchange, asym, ProtocolStack.Position.BELOW);
+            key_exchange.init();
+            key_exchange.down(new Event(Event.SET_LOCAL_ADDRESS, ch.getAddress()));
+        }*/
+
+        GMS gms_a=a.getProtocolStack().findProtocol(GMS.class), gms_c=c.getProtocolStack().findProtocol(GMS.class);
+        printSymVersion(a,b,c,d);
+        Util.sleep(500);
+
+        System.out.println("\n=== Injecting view {A,B} into A and B, and {C,D} into C and D ===\n");
+        View a_view=View.create(a.getAddress(), a.getView().getViewId().getId()+1, a.getAddress(), b.getAddress());
+        View c_view=View.create(c.getAddress(), c.getView().getViewId().getId()+1, c.getAddress(), d.getAddress());
+
+        gms_a.castViewChangeAndSendJoinRsps(a_view, null, Arrays.asList(a.getAddress(), b.getAddress()), null, null);
+        gms_c.castViewChangeAndSendJoinRsps(c_view, null, Arrays.asList(c.getAddress(), d.getAddress()), null, null);
+        Util.waitUntilAllChannelsHaveSameView(5000, 500, a,b);
+        Util.waitUntilAllChannelsHaveSameView(5000, 500, c,d);
+        printSymVersion(a,b,c,d);
+
+
+        Address leader=determineLeader(a,c);
+        JChannel leader_channel=Stream.of(a,b,c,d).filter(ch -> leader.equals(ch.getAddress())).findFirst()
+          .orElse(null);
+        GMS gms=leader_channel.getProtocolStack().findProtocol(GMS.class);
+        System.out.printf("\n=== Injecting merge event into leader %s ===\n", leader);
+
+        Map<Address,View> merge_views=new HashMap<>();
+        Stream.of(a,b,c,d).forEach(ch -> merge_views.put(ch.getAddress(), ch.getView()));
+        gms.up(new Event(Event.MERGE, merge_views));
+
+        Util.waitUntilAllChannelsHaveSameView(10000, 1000, a,b,c,d);
+        printSymVersion(a,b,c,d);
+    }
+
+
+
     protected JChannel create(String name) throws Exception {
         JChannel ch=new JChannel(Util.getTestStack()).name(name);
         ProtocolStack stack=ch.getProtocolStack();
@@ -275,7 +321,7 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
         for(JChannel ch: channels) {
             ASYM_ENCRYPT encr=ch.getProtocolStack().findProtocol(ASYM_ENCRYPT.class);
             byte[] sym_version=encr.symVersion();
-            System.out.printf("sym-version %s: %s\n", ch.getAddress(), Util.byteArrayToHexString(sym_version));
+            System.out.printf("%s: %s [%s]\n", ch.getAddress(), ch.getView(), Util.byteArrayToHexString(sym_version));
         }
     }
 
@@ -305,5 +351,11 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
         return retval;
     }
 
+    protected static Address determineLeader(JChannel... channels) {
+        Membership membership=new Membership();
+        for(JChannel ch: channels)
+            membership.add(ch.getAddress());
+        return membership.sort().elementAt(0);
+    }
 
 }

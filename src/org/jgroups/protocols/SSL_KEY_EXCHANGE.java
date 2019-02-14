@@ -34,7 +34,6 @@ import java.util.Objects;
  * @author Bela Ban
  * @since  4.0.5
  */
-@SuppressWarnings("unused")
 @MBean(description="Key exchange protocol based on an SSL connection between secret key requester and provider " +
   "(key server) to fetch a shared secret group key from the key server. That shared (symmetric) key is subsequently " +
   "used to encrypt communication between cluster members")
@@ -218,6 +217,10 @@ public class SSL_KEY_EXCHANGE extends KeyExchange {
         }
     }
 
+    public Address getServerLocation() {
+        return srv_sock == null? null : new IpAddress(getTransport().getBindAddress(), srv_sock.getLocalPort());
+    }
+
     protected void handleView(View view) {
         Address old_coord=this.view != null? this.view.getCoord() : null;
         this.view=view;
@@ -324,31 +327,20 @@ public class SSL_KEY_EXCHANGE extends KeyExchange {
         SSLContext ctx=getContext();
         SSLSocketFactory sslSocketFactory=ctx.getSocketFactory();
 
-        IpAddress dest=(IpAddress)down_prot.down(new Event(Event.GET_PHYSICAL_ADDRESS, target));
         SSLSocket sock=null;
-        for(int i=0; i < port_range; i++) {
-            try {
-                sock=(SSLSocket)sslSocketFactory.createSocket(dest.getIpAddress(), port+i);
-                sock.setSoTimeout(socket_timeout);
-                sock.setEnabledCipherSuites(sock.getSupportedCipherSuites());
-                sock.startHandshake();
-                SSLSession sslSession=sock.getSession();
+        IpAddress dest=(IpAddress)target;
+        sock=(SSLSocket)sslSocketFactory.createSocket(dest.getIpAddress(), dest.getPort());
+        sock.setSoTimeout(socket_timeout);
+        sock.setEnabledCipherSuites(sock.getSupportedCipherSuites());
+        sock.startHandshake();
+        SSLSession sslSession=sock.getSession();
 
-                log.debug("%s: created SSL connection to %s (%s); protocol: %s, cipher suite: %s",
-                          local_addr, target, sock.getRemoteSocketAddress(), sslSession.getProtocol(), sslSession.getCipherSuite());
+        log.debug("%s: created SSL connection to %s (%s); protocol: %s, cipher suite: %s",
+                  local_addr, target, sock.getRemoteSocketAddress(), sslSession.getProtocol(), sslSession.getCipherSuite());
 
-                if(session_verifier != null)
-                    session_verifier.verify(sslSession);
-                return sock;
-            }
-            catch(SecurityException sec_ex) {
-                throw sec_ex;
-            }
-            catch(Throwable t) {
-            }
-        }
-        throw new IllegalStateException(String.format("%s: failed connecting to %s (port range [%d - %d])",
-                                                      local_addr, dest.getIpAddress(), port, port+port_range));
+        if(session_verifier != null)
+            session_verifier.verify(sslSession);
+        return sock;
     }
 
 

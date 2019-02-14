@@ -177,6 +177,28 @@ On reception of a MERGE-RSP
     - Add the public keys from the payload to pub-map
 
 
+A sends an INSTALL-MERGE-VIEW to itself and D
+---------------------------------------------
+- If !EX:
+    - Create a new SGK and attach it to the message
+- Else:
+    - Add header FETCH-SHARED-KEY to message
+
+
+On reception of an INSTALL-MERGE-VIEW message
+---------------------------------------------
+- If the header is
+    - INSTALL-KEYS:
+        - Get all public keys from the payload and add them to pub-map
+        - Get the encrypted SGK for self from the message, decrypt it with the private key and install it
+    - FETCH-SHARED-KEY:
+        - Ask the KEY_EXCHANGE protocol to fetch the SGK
+        - This *blocks* until the SGK has been retrieved and installed. This prevents the delivery of the
+          INSTALL-MERGE-VIEW message until the SGK has been installed.
+- Pass the message up (this will multicast a VIEW message to the local subcluster)
+
+
+
 Subgroup coordinators A and D multicast MERGE-VIEW
 --------------------------------------------------
 - Same as sending regular VIEW

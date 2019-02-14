@@ -151,6 +151,13 @@ public class SHARED_LOOPBACK extends TP {
                 break;
             case Event.GET_PING_DATA:
                 return getDiscoveryResponsesFor(evt.getArg()); // don't pass further down
+            case Event.GET_PHYSICAL_ADDRESS:
+                if(cluster_name == null)
+                    return retval;
+                Address mbr=evt.getArg();
+                Map<Address,SHARED_LOOPBACK> map=routing_table.get(cluster_name);
+                SHARED_LOOPBACK lp=map != null? map.get(mbr) : null;
+                return lp != null? lp.getPhysicalAddress() : null;
         }
 
         return retval;

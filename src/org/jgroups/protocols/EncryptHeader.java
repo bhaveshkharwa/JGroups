@@ -1,5 +1,6 @@
 package org.jgroups.protocols;
 
+import org.jgroups.Address;
 import org.jgroups.Global;
 import org.jgroups.Header;
 import org.jgroups.util.Util;
@@ -16,8 +17,9 @@ public class EncryptHeader extends Header {
     public static final byte INSTALL_KEYS       = 1; // body of the message contains public and/or shared keys
     public static final byte FETCH_SHARED_KEY   = 2; // the receiver fetches the shared key via an external key exchange
 
-    protected byte   type;
-    protected byte[] version;
+    protected byte    type;
+    protected byte[]  version;
+    protected Address server; // used with FETCH_SHARED_KEY
 
 
     public EncryptHeader() {}
@@ -32,27 +34,32 @@ public class EncryptHeader extends Header {
         this.version=version;
     }
 
-    public byte                       type()        {return type;}
-    public byte[]                     version()     {return version;}
-    public short                      getMagicId()  {return 88;}
-    public Supplier<? extends Header> create()      {return EncryptHeader::new;}
+    public byte                       type()            {return type;}
+    public byte[]                     version()         {return version;}
+    public Address                    server()          {return server;}
+    public EncryptHeader              server(Address s) {this.server=s; return this;}
+    public short                      getMagicId()      {return 88;}
+    public Supplier<? extends Header> create()          {return EncryptHeader::new;}
 
     public void writeTo(DataOutput out) throws Exception {
         out.writeByte(type);
         Util.writeByteBuffer(version, 0, version != null? version.length : 0, out);
+        Util.writeAddress(server, out);
     }
 
     public void readFrom(DataInput in) throws Exception {
         type=in.readByte();
         version=Util.readByteBuffer(in);
+        server=Util.readAddress(in);
     }
 
     public String toString() {
         return String.format("%s [version=%s]",
-                             typeToString(type), (version != null? Util.byteArrayToHexString(version) : "null"));
+                             typeToString(type), (version != null? Util.byteArrayToHexString(version) : "null"))
+          + (server == null? "" : " [server=" + server + "]");
     }
 
-    public int serializedSize() {return Global.BYTE_SIZE + Util.size(version);}
+    public int serializedSize() {return Global.BYTE_SIZE + Util.size(version) + Util.size(server);}
 
     protected static String typeToString(byte type) {
         switch(type) {

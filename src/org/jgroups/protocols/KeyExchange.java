@@ -8,7 +8,6 @@ import org.jgroups.util.Tuple;
 
 import javax.crypto.SecretKey;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -23,7 +22,7 @@ public abstract class KeyExchange extends Protocol {
     protected Address local_addr;
 
     public List<Integer> providedUpServices() {
-        return Collections.singletonList(Event.FETCH_SECRET_KEY);
+        return Arrays.asList(Event.FETCH_SECRET_KEY, Event.FETCH_SERVER_ADDRESS);
     }
 
     public List<Integer> requiredUpServices() {
@@ -35,7 +34,10 @@ public abstract class KeyExchange extends Protocol {
      * (and version) needs to be installed in a protocol above using {@link #setSecretKeyAbove(Tuple)}.
      * @param target The member from which to fetch the secret key
      */
-    public abstract void fetchSecretKeyFrom(Address target) throws Exception;
+    public abstract void    fetchSecretKeyFrom(Address target) throws Exception;
+
+    /** Returns the address of the server, e.g. server socket (if any) */
+    public abstract Address getServerLocation();
 
 
     public Object down(Event evt) {
@@ -49,6 +51,8 @@ public abstract class KeyExchange extends Protocol {
             case Event.FETCH_SECRET_KEY:
                 Address target=evt.arg();
                 try {
+                    if(log.isTraceEnabled())
+                        log.trace("%s: fetching secret key from %s", local_addr, target);
                     fetchSecretKeyFrom(target);
                 }
                 catch(Exception e) {
@@ -56,6 +60,8 @@ public abstract class KeyExchange extends Protocol {
                     log.warn("failed fetching secret key from %s: %s", target, e);
                 }
                 return null; // the event is consumed and should not be passed further down
+            case Event.FETCH_SERVER_ADDRESS:
+                return getServerLocation();
         }
         return down_prot.down(evt);
     }
