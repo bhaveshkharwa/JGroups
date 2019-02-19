@@ -2051,7 +2051,6 @@ The AuthToken implememntations are listed below. Check the javadoc for details.
 | Krb5Token | Uses Kerberos for authentication
 | MD5Token | Uses an MD5 hash of a simple string (similar to SimpleString above, but hashed instead of plaintext)
 | X509Token | Uses a shared X.509 certificate
-| ChallengeResponseToken | Uses a challenge-response mechanism
 |=================
 
 

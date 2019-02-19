@@ -14,7 +14,6 @@ import java.security.*;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.BiPredicate;
 
 /**
  * Encrypts and decrypts communication in JGroups by using a secret key distributed to all cluster members by the
@@ -44,25 +43,20 @@ import java.util.function.BiPredicate;
 @MBean(description="Asymmetric encryption protocol. The secret key for encryption and decryption of messages is fetched " +
   "from a key server (the coordinator) via asymmetric encryption")
 public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
-    protected static final short                   GMS_ID=ClassConfigurator.getProtocolId(GMS.class);
+    protected static final short        GMS_ID=ClassConfigurator.getProtocolId(GMS.class);
 
     @Property(description="When a member leaves, change the secret key, preventing old members from eavesdropping")
-    protected boolean                              change_key_on_leave=true;
+    protected boolean                   change_key_on_leave=true;
 
     @Property(description="If true, a separate KeyExchange protocol (somewhere in the stack) is used to" +
       " fetch the shared secret key. If false, the default (built-in) key exchange protocol will be used.")
-    protected boolean                              use_external_key_exchange;
-    protected KeyExchange                          key_exchange;
-    protected volatile Address                     key_server_addr;
-    protected volatile boolean                     send_group_keys;    // set by handleView()
-    protected KeyPair                              key_pair;     // to store own's public/private Key
-    protected Cipher                               asym_cipher;  // decrypting cypher for secret key requests
-
-    // use registerBypasser to add code that is called to check if a message should bypass ASYM_ENCRYPT
-    protected List<BiPredicate<Message,Boolean>>   bypassers;
-
-    // map of members and their public keys
-    protected final Map<Address,byte[]>            pub_map=new ConcurrentHashMap<>();
+    protected boolean                   use_external_key_exchange;
+    protected KeyExchange               key_exchange;
+    protected volatile Address          key_server_addr;
+    protected volatile boolean          send_group_keys;    // set by handleView()
+    protected KeyPair                   key_pair;     // to store own's public/private Key
+    protected Cipher                    asym_cipher;  // decrypting cypher for secret key requests
+    protected final Map<Address,byte[]> pub_map=new ConcurrentHashMap<>(); // map of members and their public keys
 
 
 
@@ -86,22 +80,6 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         return Arrays.asList(Event.GET_SECRET_KEY, Event.SET_SECRET_KEY);
     }
 
-    public synchronized ASYM_ENCRYPT registerBypasser(BiPredicate<Message,Boolean> bypasser) {
-        if(bypasser != null) {
-            if(bypassers == null)
-                bypassers=new ArrayList<>();
-            bypassers.add(bypasser);
-        }
-        return this;
-    }
-
-    public synchronized ASYM_ENCRYPT unregisterBypasser(BiPredicate<Message,Boolean> bypasser) {
-        if(bypasser != null && bypassers != null) {
-            if(bypassers.remove(bypasser) && bypassers.isEmpty())
-                bypassers=null;
-        }
-        return this;
-    }
 
     @ManagedAttribute(description="Keys in the public key map")
     public String getPublicKeys() {
@@ -143,7 +121,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         Processing processing=skipDownMessage(msg);
         if(processing == Processing.PROCESS)
             return super.down(msg);
-        if(processing == Processing.SKIP || bypass(msg, false))
+        if(processing == Processing.SKIP)
             return down_prot.down(msg);
         return null; // DROP
     }
@@ -168,7 +146,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
     public Object up(Message msg) {
         if(dropMulticastMessageFromNonMember(msg))
             return null;
-        if(skipUpMessage(msg) || bypass(msg, true))
+        if(skipUpMessage(msg))
             return up_prot.up(msg);
         return super.up(msg);
     }
@@ -179,7 +157,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                 batch.remove(msg);
                 continue;
             }
-            if(skipUpMessage(msg) || bypass(msg, true)) {
+            if(skipUpMessage(msg)) {
                 try {
                     up_prot.up(msg);
                     batch.remove(msg);
@@ -349,18 +327,6 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         }
         return retval;
     }
-
-    protected boolean bypass(Message msg, boolean up) {
-        List<BiPredicate<Message,Boolean>> tmp=bypassers;
-        if(tmp == null)
-            return false;
-        for(BiPredicate<Message,Boolean> pred: tmp) {
-            if(pred.test(msg, up))
-                return true;
-        }
-        return false;
-    }
-
 
     protected void installPublicKeys(Address sender, byte[] buf, int offset, int length) {
         ByteArrayDataInputStream in=new ByteArrayDataInputStream(buf, offset, length);
