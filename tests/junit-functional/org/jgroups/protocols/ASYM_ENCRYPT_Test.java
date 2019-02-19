@@ -15,7 +15,10 @@ import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-import java.util.*;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.jgroups.util.Util.shutdown;
@@ -265,15 +268,17 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
         Util.waitUntilAllChannelsHaveSameView(10000, 1000, a,b,c,d);
 
 
-        /*for(JChannel ch: Arrays.asList(a,b)) {
-            ASYM_ENCRYPT asym=ch.getProtocolStack().findProtocol(ASYM_ENCRYPT.class);
-            asym.use_external_key_exchange=true;
+        for(JChannel ch: Arrays.asList(a,b,c,d)) {
+            ProtocolStack stack=ch.getProtocolStack();
+            ASYM_ENCRYPT asym=stack.findProtocol(ASYM_ENCRYPT.class);
             SSL_KEY_EXCHANGE key_exchange=new SSL_KEY_EXCHANGE().setKeystoreName(KEYSTORE)
               .setKeystorePassword(KEYSTORE_PWD).setPortRange(2);
             ch.getProtocolStack().insertProtocolInStack(key_exchange, asym, ProtocolStack.Position.BELOW);
             key_exchange.init();
             key_exchange.down(new Event(Event.SET_LOCAL_ADDRESS, ch.getAddress()));
-        }*/
+            asym.setProtocolStack(stack);
+            asym.setUseExternalKeyExchange(true);
+        }
 
         GMS gms_a=a.getProtocolStack().findProtocol(GMS.class), gms_c=c.getProtocolStack().findProtocol(GMS.class);
         printSymVersion(a,b,c,d);
@@ -283,12 +288,18 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
         View a_view=View.create(a.getAddress(), a.getView().getViewId().getId()+1, a.getAddress(), b.getAddress());
         View c_view=View.create(c.getAddress(), c.getView().getViewId().getId()+1, c.getAddress(), d.getAddress());
 
+        discardTraffic(a, c.getAddress(), d.getAddress()); // A,B discard traffic from C,D
+        discardTraffic(b, c.getAddress(), d.getAddress());
+        discardTraffic(c, a.getAddress(), b.getAddress()); // C,D discard traffic from A,B
+        discardTraffic(d, a.getAddress(), b.getAddress());
+
         gms_a.castViewChangeAndSendJoinRsps(a_view, null, Arrays.asList(a.getAddress(), b.getAddress()), null, null);
         gms_c.castViewChangeAndSendJoinRsps(c_view, null, Arrays.asList(c.getAddress(), d.getAddress()), null, null);
         Util.waitUntilAllChannelsHaveSameView(5000, 500, a,b);
         Util.waitUntilAllChannelsHaveSameView(5000, 500, c,d);
         printSymVersion(a,b,c,d);
 
+        Stream.of(a,b,c,d).forEach(ch -> ch.getProtocolStack().removeProtocol(DISCARD.class));
 
         Address leader=determineLeader(a,c);
         JChannel leader_channel=Stream.of(a,b,c,d).filter(ch -> leader.equals(ch.getAddress())).findFirst()
@@ -356,6 +367,12 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
         for(JChannel ch: channels)
             membership.add(ch.getAddress());
         return membership.sort().elementAt(0);
+    }
+
+    protected static void discardTraffic(JChannel ch, Address ... addrs) {
+        ProtocolStack stack=ch.getProtocolStack();
+        DISCARD d=new DISCARD().addIgnoredMembers(addrs);
+        stack.insertProtocolInStack(d, stack.getTransport(), ProtocolStack.Position.ABOVE);
     }
 
 }

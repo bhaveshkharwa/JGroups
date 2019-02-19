@@ -49,9 +49,10 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
     @Property(description="When a member leaves, change the secret key, preventing old members from eavesdropping")
     protected boolean                              change_key_on_leave=true;
 
-    @Property(description="If true, a separate KeyExchange protocol (somewhere below in ths stack) is used to" +
+    @Property(description="If true, a separate KeyExchange protocol (somewhere in the stack) is used to" +
       " fetch the shared secret key. If false, the default (built-in) key exchange protocol will be used.")
     protected boolean                              use_external_key_exchange;
+    protected KeyExchange                          key_exchange;
     protected volatile Address                     key_server_addr;
     protected volatile boolean                     send_group_keys;    // set by handleView()
     protected KeyPair                              key_pair;     // to store own's public/private Key
@@ -74,7 +75,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
     public ASYM_ENCRYPT setChangeKeyOnLeave(boolean c)       {change_key_on_leave=c; return this;}
 
     public boolean      getUseExternalKeyExchange()          {return use_external_key_exchange;}
-    public ASYM_ENCRYPT setUseExternalKeyExchange(boolean u) {use_external_key_exchange=u; return this;}
+    public ASYM_ENCRYPT setUseExternalKeyExchange(boolean u) {use_external_key_exchange=u; if(u) getKeyExchange(); return this;}
 
     public KeyPair      keyPair()                            {return key_pair;}
     public Cipher       asymCipher()                         {return asym_cipher;}
@@ -120,12 +121,8 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         send_group_keys=false;
         initKeyPair();
         super.init();
-        if(use_external_key_exchange) {
-            List<Integer> provided_up_services=getDownServices();
-            if(provided_up_services == null || !provided_up_services.contains(Event.FETCH_SECRET_KEY)
-              || !provided_up_services.contains(Event.FETCH_SERVER_ADDRESS))
-                throw new IllegalStateException("found no key exchange protocol below servicing event FETCH_SECRET_KEY");
-        }
+        if(use_external_key_exchange)
+            getKeyExchange();
     }
 
 
@@ -198,7 +195,12 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
 
     protected boolean dropMulticastMessageFromNonMember(Message msg) {
         return msg.dest() == null &&
-          !inView(msg.src(), String.format("%s: dropped message from non-member %s", local_addr, msg.getSrc()));
+          !inView(msg.src(), String.format("%s: dropped multicast message from non-member %s", local_addr, msg.getSrc()));
+    }
+
+    protected void getKeyExchange() {
+        if((key_exchange=stack.findProtocol(KeyExchange.class)) == null)
+            throw new IllegalStateException(KeyExchange.class.getSimpleName() + " not found in stack");
     }
 
 
@@ -231,7 +233,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                         // shared key *before* delivering the JOIN_RSP (so it can decrypt it)
                         log.trace("%s: asking %s to fetch the shared group key %s via an external key exchange protocol",
                                   local_addr, msg.getDest(), Util.byteArrayToHexString(sym_version));
-                        Address srv=(Address)down_prot.down(new Event(Event.FETCH_SERVER_ADDRESS));
+                        Address srv=key_exchange.getServerLocation();
                         encr_msg.putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion()).server(srv));
                     }
                     else {
@@ -244,14 +246,13 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                 }
                 catch(Exception ex) {
                     log.warn("%s: unable to send message down", local_addr, getUseExternalKeyExchange());
-                }
-                break;
+                }                break;
             case GMS.GmsHeader.VIEW:
                 try {
                     Message encr_msg=encrypt(msg); // already a copy
                     if(use_external_key_exchange) {
                         // ask mbrs to fetch and install the new group key *before* delivering the view (so they can decrypt it)
-                        Address srv=(Address)down_prot.down(new Event(Event.FETCH_SERVER_ADDRESS));
+                        Address srv=key_exchange.getServerLocation();
                         encr_msg.putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion()).server(srv));
                     }
                     else
@@ -267,11 +268,11 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
             case GMS.GmsHeader.INSTALL_MERGE_VIEW:
                 // a new group key was created in down(INSTALL_MERGE_VIEW)
                 if(Objects.equals(local_addr, msg.dest()))
-                    return Processing.PROCESS;
+                    break;
                 try {
                     Message encr_msg=encrypt(msg); // already a copy
                     if(use_external_key_exchange) {
-                        Address srv=(Address)down_prot.down(new Event(Event.FETCH_SERVER_ADDRESS));
+                        Address srv=key_exchange.getServerLocation();
                         encr_msg.putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion()).server(srv));
                     }
                     else
@@ -310,13 +311,12 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         switch(hdr.getType()) {
             case GMS.GmsHeader.JOIN_REQ:
             case GMS.GmsHeader.JOIN_REQ_WITH_STATE_TRANSFER:
+            case GMS.GmsHeader.MERGE_RSP:
                 return processEncryptMessage(msg, h, true);
             case GMS.GmsHeader.JOIN_RSP:
             case GMS.GmsHeader.VIEW:
             case GMS.GmsHeader.INSTALL_MERGE_VIEW:
                 return processEncryptMessage(msg, h, false);
-            case GMS.GmsHeader.MERGE_RSP:
-                return processEncryptMessage(msg, h, true);
             case GMS.GmsHeader.MERGE_REQ:
             case GMS.GmsHeader.VIEW_ACK:
             case GMS.GmsHeader.GET_DIGEST_REQ:
@@ -335,8 +335,15 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                 break;
             case EncryptHeader.FETCH_SHARED_KEY:
                 if(!Objects.equals(local_addr, msg.getSrc())) {
-                    Address target=hdr.server() != null? hdr.server() : msg.getSrc();
-                    down_prot.down(new Event(Event.FETCH_SECRET_KEY, target));
+                    try {
+                        Address key_server=hdr.server() != null? hdr.server() : msg.src();
+                        if(log.isTraceEnabled())
+                            log.trace("%s: fetching group key from %s", local_addr, key_server);
+                        key_exchange.fetchSecretKeyFrom(key_server);
+                    }
+                    catch(Exception e) {
+                        log.warn("failed fetching group key from %s: %s", msg.src(), e);
+                    }
                 }
                 break;
         }

@@ -269,7 +269,8 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
         EncryptHeader hdr=msg.getHeader(this.id);
         if(!Arrays.equals(hdr.version(), sym_version)) {
             if(!inView(msg.src(),
-                       String.format("%s: rejected decryption of message from non-member %s", local_addr, msg.getSrc())))
+                       String.format("%s: rejected decryption of %s message from non-member %s",
+                                     local_addr, msg.dest() == null? "multicast" : "unicast", msg.getSrc())))
                 return null;
             cipher=key_map.get(new AsciiString(hdr.version()));
             if(cipher == null) {

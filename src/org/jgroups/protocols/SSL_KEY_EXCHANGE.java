@@ -100,21 +100,21 @@ public class SSL_KEY_EXCHANGE extends KeyExchange {
     protected String          session_verifier_arg;
 
 
-    protected SSLServerSocket srv_sock;
-
-    protected Runner          srv_sock_handler;
-
-    protected KeyStore        key_store;
-
-    protected View            view;
-
-    protected SessionVerifier session_verifier;
+    protected SSLServerSocket              srv_sock;
+    protected Runner                       srv_sock_handler;
+    protected KeyStore                     key_store;
+    protected View                         view;
+    protected SessionVerifier              session_verifier;
 
 
     public SSL_KEY_EXCHANGE setKeystoreName(String name)    {this.keystore_name=name; return this;}
     public SSL_KEY_EXCHANGE setKeystorePassword(String pwd) {this.keystore_password=pwd; return this;}
     public SSL_KEY_EXCHANGE setPortRange(int r)             {this.port_range=r; return this;}
     public SSL_KEY_EXCHANGE setPort(int p)                  {this.port=p; return this;}
+
+    public Address getServerLocation() {
+        return srv_sock == null? null : new IpAddress(getTransport().getBindAddress(), srv_sock.getLocalPort());
+    }
 
     public void init() throws Exception {
         super.init();
@@ -175,7 +175,6 @@ public class SSL_KEY_EXCHANGE extends KeyExchange {
         return super.down(msg);
     }
 
-    @SuppressWarnings("unchecked")
     public Object up(Event evt) {
         if(evt.getType() == Event.CONFIG) {
             if(bind_addr == null) {
@@ -217,31 +216,6 @@ public class SSL_KEY_EXCHANGE extends KeyExchange {
         }
     }
 
-    public Address getServerLocation() {
-        return srv_sock == null? null : new IpAddress(getTransport().getBindAddress(), srv_sock.getLocalPort());
-    }
-
-    protected void handleView(View view) {
-        Address old_coord=this.view != null? this.view.getCoord() : null;
-        this.view=view;
-
-        if(Objects.equals(view.getCoord(), local_addr)) {
-            if(!Objects.equals(old_coord, local_addr)) {
-                try {
-                    becomeKeyserver();
-                }
-                catch(Exception e) {
-                    log.error("failed becoming key server", e);
-                }
-            }
-        }
-        else { // stop being keyserver, close the server socket and handler
-            if(Objects.equals(old_coord, local_addr))
-                stopKeyserver();
-        }
-    }
-
-
 
     protected void accept() {
         try(SSLSocket client_sock=(SSLSocket)srv_sock.accept()) {
@@ -278,6 +252,27 @@ public class SSL_KEY_EXCHANGE extends KeyExchange {
         }
         catch(Throwable t) {
             log.trace("%s: failure handling client socket: %s", local_addr, t.getMessage());
+        }
+    }
+
+
+    protected void handleView(View view) {
+        Address old_coord=this.view != null? this.view.getCoord() : null;
+        this.view=view;
+
+        if(Objects.equals(view.getCoord(), local_addr)) {
+            if(!Objects.equals(old_coord, local_addr)) {
+                try {
+                    becomeKeyserver();
+                }
+                catch(Exception e) {
+                    log.error("failed becoming key server", e);
+                }
+            }
+        }
+        else { // stop being keyserver, close the server socket and handler
+            if(Objects.equals(old_coord, local_addr))
+                stopKeyserver();
         }
     }
 
@@ -327,23 +322,58 @@ public class SSL_KEY_EXCHANGE extends KeyExchange {
         SSLContext ctx=getContext();
         SSLSocketFactory sslSocketFactory=ctx.getSocketFactory();
 
+        if(target instanceof IpAddress)
+            return createSocketTo((IpAddress)target, sslSocketFactory);
+
+        IpAddress dest=(IpAddress)down_prot.down(new Event(Event.GET_PHYSICAL_ADDRESS, target));
         SSLSocket sock=null;
-        IpAddress dest=(IpAddress)target;
-        sock=(SSLSocket)sslSocketFactory.createSocket(dest.getIpAddress(), dest.getPort());
-        sock.setSoTimeout(socket_timeout);
-        sock.setEnabledCipherSuites(sock.getSupportedCipherSuites());
-        sock.startHandshake();
-        SSLSession sslSession=sock.getSession();
+        for(int i=0; i < port_range; i++) {
+            try {
+                sock=(SSLSocket)sslSocketFactory.createSocket(dest.getIpAddress(), port+i);
+                sock.setSoTimeout(socket_timeout);
+                sock.setEnabledCipherSuites(sock.getSupportedCipherSuites());
+                sock.startHandshake();
+                SSLSession sslSession=sock.getSession();
 
-        log.debug("%s: created SSL connection to %s (%s); protocol: %s, cipher suite: %s",
-                  local_addr, target, sock.getRemoteSocketAddress(), sslSession.getProtocol(), sslSession.getCipherSuite());
+                log.debug("%s: created SSL connection to %s (%s); protocol: %s, cipher suite: %s",
+                          local_addr, target, sock.getRemoteSocketAddress(), sslSession.getProtocol(), sslSession.getCipherSuite());
 
-        if(session_verifier != null)
-            session_verifier.verify(sslSession);
-        return sock;
+                if(session_verifier != null)
+                    session_verifier.verify(sslSession);
+                return sock;
+            }
+            catch(SecurityException sec_ex) {
+                throw sec_ex;
+            }
+            catch(Throwable t) {
+            }
+        }
+        throw new IllegalStateException(String.format("failed connecting to %s (port range [%d - %d])",
+                                                      dest.getIpAddress(), port, port+port_range));
     }
 
+    protected SSLSocket createSocketTo(IpAddress dest, SSLSocketFactory sslSocketFactory) {
+        try {
+            SSLSocket sock=(SSLSocket)sslSocketFactory.createSocket(dest.getIpAddress(), dest.getPort());
+            sock.setSoTimeout(socket_timeout);
+            sock.setEnabledCipherSuites(sock.getSupportedCipherSuites());
+            sock.startHandshake();
+            SSLSession sslSession=sock.getSession();
 
+            log.debug("%s: created SSL connection to %s (%s); protocol: %s, cipher suite: %s",
+                      local_addr, dest, sock.getRemoteSocketAddress(), sslSession.getProtocol(), sslSession.getCipherSuite());
+
+            if(session_verifier != null)
+                session_verifier.verify(sslSession);
+            return sock;
+        }
+        catch(SecurityException sec_ex) {
+            throw sec_ex;
+        }
+        catch(Throwable t) {
+            throw new IllegalStateException(String.format("failed connecting to %s: %s", dest, t.getMessage()));
+        }
+    }
 
 
     protected SSLContext getContext() throws Exception {
