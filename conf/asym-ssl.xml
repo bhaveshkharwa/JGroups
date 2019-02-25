@@ -13,9 +13,6 @@
         keystore_password="password"
         port_range="10"
     />
-    <pbcast.NAKACK2 use_mcast_xmit="false"/>
-    <UNICAST3/>
-    <pbcast.STABLE/>
     <ASYM_ENCRYPT
             change_key_on_leave="true"
             use_external_key_exchange="true"
@@ -23,6 +20,9 @@
             sym_algorithm="AES"
             asym_keylength="512"
             asym_algorithm="RSA"/>
+    <pbcast.NAKACK2 use_mcast_xmit="false"/>
+    <UNICAST3/>
+    <pbcast.STABLE/>
     <pbcast.GMS join_timeout="2000"/>
     <UFC/>
     <MFC/>

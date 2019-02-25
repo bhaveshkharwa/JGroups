@@ -1850,7 +1850,7 @@ keystore (symmetric encryption) or a new joiner fetches it from the coordinator 
 
 A sender encrypts a message with the shared secret key and the receivers decrypt it with the same secret key.
 
-By default, only the payload of a message is encrypted, but not the other metadata (e.g. headers, destination address,
+By default, only the _payload_ of a message is encrypted, but not the other metadata (e.g. headers, destination address,
 flags etc).
 
 If (for example) headers are not encrypted, it is possible to use replay attacks, because the sequence number (seqno)
@@ -1901,8 +1901,7 @@ ${SYM_ENCRYPT}
 [[ASYM_ENCRYPT]]
 ===== ASYM_ENCRYPT
 Contrary to SYM_ENCRYPT, the secret key is not fetched from a shared keystore, but from the current coordinator C. After
-new member P joins the cluster (passing the join check done by AUTH), P sends a request to get the secret key
-(including P's public key) to C.
+new member P joins the cluster, it sends a request to get the secret key (including P's public key).
 
 C then sends the secret key back to P, encrypted with P's public key, and P decrypts it with its private key
 and installs it. From then on, P encrypts and decrypts messages using the secret key.
