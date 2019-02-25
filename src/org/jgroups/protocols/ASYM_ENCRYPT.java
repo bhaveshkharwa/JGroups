@@ -45,8 +45,12 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
     protected static final short        GMS_ID=ClassConfigurator.getProtocolId(GMS.class);
 
-    @Property(description="When a member leaves, change the secret key, preventing old members from eavesdropping")
-    protected boolean                   change_key_on_leave=true;
+    @Property(description="When a node leaves, change the secret group key, preventing old members from eavesdropping")
+    protected boolean                   change_key_on_leave;
+
+    @Property(description="Change the secret group key when the coordinator changes. If enabled, this will take " +
+      "place even if change_key_on_leave is disabled.")
+    protected boolean                   change_key_on_coord_leave=true;
 
     @Property(description="If true, a separate KeyExchange protocol (somewhere in the stack) is used to" +
       " fetch the shared secret key. If false, the default (built-in) key exchange protocol will be used.")
@@ -67,10 +71,10 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
 
     public boolean      getChangeKeyOnLeave()                {return change_key_on_leave;}
     public ASYM_ENCRYPT setChangeKeyOnLeave(boolean c)       {change_key_on_leave=c; return this;}
-
+    public boolean      getChangeKeyOnCoordLeave()           {return change_key_on_coord_leave;}
+    public ASYM_ENCRYPT setChangeKeyOnCoordLeave(boolean c)  {change_key_on_coord_leave=c; return this;}
     public boolean      getUseExternalKeyExchange()          {return use_external_key_exchange;}
-    public ASYM_ENCRYPT setUseExternalKeyExchange(boolean u) {use_external_key_exchange=u; if(u) getKeyExchange(); return this;}
-
+    public ASYM_ENCRYPT setUseExternalKeyExchange(boolean u) {use_external_key_exchange=u; return this;}
     public KeyPair      keyPair()                            {return key_pair;}
     public Cipher       asymCipher()                         {return asym_cipher;}
     public Address      keyServerAddr()                      {return key_server_addr;}
@@ -100,7 +104,7 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         initKeyPair();
         super.init();
         if(use_external_key_exchange)
-            getKeyExchange();
+            fetchAndSetKeyExchange();
     }
 
 
@@ -176,9 +180,10 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
           !inView(msg.src(), String.format("%s: dropped multicast message from non-member %s", local_addr, msg.getSrc()));
     }
 
-    protected void getKeyExchange() {
+    public ASYM_ENCRYPT fetchAndSetKeyExchange() {
         if((key_exchange=stack.findProtocol(KeyExchange.class)) == null)
             throw new IllegalStateException(KeyExchange.class.getSimpleName() + " not found in stack");
+        return this;
     }
 
 
@@ -224,7 +229,8 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                 }
                 catch(Exception ex) {
                     log.warn("%s: unable to send message down", local_addr, getUseExternalKeyExchange());
-                }                break;
+                }
+                break;
             case GMS.GmsHeader.VIEW:
                 try {
                     Message encr_msg=encrypt(msg); // already a copy
@@ -523,33 +529,37 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
 
 
     @Override protected void handleView(View v) {
-        boolean left_mbrs, create_new_key;
-        Address old_key_server;
+        boolean left_mbrs, create_new_key, key_server_changed;
 
         pub_map.keySet().retainAll(v.getMembers());
-
         synchronized(this) {
-            left_mbrs=change_key_on_leave && this.view != null && !v.containsMembers(this.view.getMembersRaw());
-            create_new_key=secret_key == null || left_mbrs; //  || v instanceof MergeView;
+            key_server_changed=!Objects.equals(v.getCoord(), key_server_addr);
+            left_mbrs=this.view != null && !v.containsMembers(this.view.getMembersRaw());
             super.handleView(v);
-            old_key_server=key_server_addr;
             key_server_addr=v.getCoord(); // the coordinator is the keyserver
-            send_group_keys=v instanceof MergeView;
-            if(Objects.equals(key_server_addr, local_addr)) {
-                if(!Objects.equals(key_server_addr, old_key_server))
-                    log.debug("%s: I'm the new key server", local_addr);
-                if(create_new_key) {
-                    createNewKey("because of new view " + v);
-                    if(!left_mbrs && !(v instanceof MergeView))
-                        return;
-                    send_group_keys=true; // keys will be added to VIEW in down()
-                    if(use_external_key_exchange)
-                        log.trace("%s: asking all members to fetch the shared key %s via an external key exchange protocol",
-                                  local_addr, Util.byteArrayToHexString(sym_version));
-                    else
-                        log.debug("%s: sending encrypted group keys to all members (version: %s)",
-                                  local_addr, Util.byteArrayToHexString(sym_version));
-                }
+
+            if(!Objects.equals(key_server_addr, local_addr))
+                return; // all non-coordinators are done at this point
+
+            // if we get a MergeView, the secret key has already been created (in down(INSTALL_MERGE_VIEW)
+            create_new_key=secret_key == null // always create a group key the first time (key is null)
+              || ((change_key_on_leave && left_mbrs) || (change_key_on_coord_leave && key_server_changed) && !(v instanceof MergeView));
+
+            // keys will be added to VIEW in down()
+            send_group_keys=create_new_key  || v instanceof MergeView;
+
+            if(key_server_changed)
+                log.debug("%s: I'm the new key server", local_addr);
+            if(create_new_key)
+                createNewKey("because of new view " + v);
+
+            if(send_group_keys) {
+                if(use_external_key_exchange)
+                    log.trace("%s: asking all members to fetch the shared key %s via an external key exchange protocol",
+                              local_addr, Util.byteArrayToHexString(sym_version));
+                else
+                    log.trace("%s: sending encrypted group keys to all members (version: %s)",
+                              local_addr, Util.byteArrayToHexString(sym_version));
             }
         }
     }

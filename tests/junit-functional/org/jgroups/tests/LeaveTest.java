@@ -28,25 +28,34 @@ import java.util.stream.Stream;
  */
 @Test(groups=Global.FUNCTIONAL,singleThreaded=true)
 public class LeaveTest {
-
-    protected static final int NUM = 10;
+    protected final String             cluster_name;
+    protected static final int         NUM=10;
     protected static final InetAddress LOOPBACK;
+
+    public LeaveTest() {
+        cluster_name=getClusterName();
+    }
 
     static {
         try {
             LOOPBACK = Util.getLocalhost();
-        } catch (Exception e) {
+        }
+        catch (Exception e) {
             throw new RuntimeException(e);
         }
     }
 
     protected JChannel[] channels;
 
+    protected String getClusterName() {return LeaveTest.class.getSimpleName();}
+
     protected void setup(int num) throws Exception {
         channels=new JChannel[num];
         for(int i = 0; i < channels.length; i++)
-            channels[i] = create(String.valueOf(i + 1)).connect(LeaveTest.class.getSimpleName());
+            channels[i] = create(String.valueOf(i + 1)).connect(getClusterName());
         Util.waitUntilAllChannelsHaveSameView(10000, 1000, channels);
+        System.out.printf("\n%s\n\n", Stream.of(channels).map(ch -> ch.getAddress() + ": " + ch.getView())
+          .collect(Collectors.joining("\n")));
     }
 
     @AfterMethod protected void destroy() {
@@ -68,6 +77,8 @@ public class LeaveTest {
     public void testCoordLeave() throws Exception {
         setup(NUM);
         Util.close(channels[0]);
+        List<JChannel> list=Stream.of(channels).filter(JChannel::isConnected).collect(Collectors.toList());
+        Util.waitUntilAllChannelsHaveSameView(5000, 1000, list);
         assert Arrays.stream(channels, 0, channels.length).filter(JChannel::isConnected)
           .peek(ch -> System.out.printf("%s: %s\n", ch.getAddress(), ch.getView()))
           .allMatch(ch -> ch.getView().size() == channels.length-1 && ch.getView().getCoord().equals(channels[1].getAddress()));
@@ -77,6 +88,8 @@ public class LeaveTest {
     public void testParticipantLeave() throws Exception {
         setup(NUM);
         Util.close(channels[2]);
+        List<JChannel> list=Stream.of(channels).filter(JChannel::isConnected).collect(Collectors.toList());
+        Util.waitUntilAllChannelsHaveSameView(5000, 1000, list);
         assert Arrays.stream(channels, 0, channels.length).filter(JChannel::isConnected)
           .peek(ch -> System.out.printf("%s: %s\n", ch.getAddress(), ch.getView()))
           .allMatch(ch -> ch.getView().size() == channels.length-1 && ch.getView().getCoord().equals(channels[0].getAddress()));
@@ -86,6 +99,8 @@ public class LeaveTest {
     public void testSequentialLeavesOfCoordinators() throws Exception {
         setup(NUM);
         Arrays.stream(channels, 0, channels.length/2).forEach(Util::close);
+        Util.waitUntilAllChannelsHaveSameView(5000, 1000,
+                                              Arrays.stream(channels, channels.length/2, channels.length).collect(Collectors.toList()));
         Arrays.stream(channels, 0, channels.length).forEach(ch -> {
             if(ch.isConnected())
                 System.out.printf("%s: %s\n", ch.getAddress(), ch.getView());
@@ -205,17 +220,13 @@ public class LeaveTest {
         Util.setField(vh_field, gms, vh);
     }
 
-    protected static JChannel create(String name) throws Exception {
+    protected JChannel create(String name) throws Exception {
         return new JChannel(
           new TCP().setBindAddress(LOOPBACK).setBindPort(7800),
           new MPING(),
           // omit MERGE3 from the stack -- nodes are leaving gracefully
-          // new MERGE3().setMinInterval(1000).setMaxInterval(3000).setCheckInterval(5000),
-          // new FD_SOCK(),
-          // new FD_ALL(),
-          // new VERIFY_SUSPECT(),
           new NAKACK2().setUseMcastXmit(false),
-          new UNICAST3(), // .setXmitInterval(500),
+          new UNICAST3(),
           new STABLE(),
           new GMS().joinTimeout(1000).leaveTimeout(10000).printLocalAddress(false))
           .name(name);

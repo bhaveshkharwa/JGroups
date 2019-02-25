@@ -277,7 +277,7 @@ public class ASYM_ENCRYPT_Test extends EncryptTest {
             key_exchange.init();
             key_exchange.down(new Event(Event.SET_LOCAL_ADDRESS, ch.getAddress()));
             asym.setProtocolStack(stack);
-            asym.setUseExternalKeyExchange(true);
+            asym.setUseExternalKeyExchange(true).fetchAndSetKeyExchange();
         }
 
         GMS gms_a=a.getProtocolStack().findProtocol(GMS.class), gms_c=c.getProtocolStack().findProtocol(GMS.class);

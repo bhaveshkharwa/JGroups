@@ -239,8 +239,6 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
         return cipher;
     }
 
-    // todo: I don't think decryptMessage() needs to copy the message as the sender already makes a copy!
-    // todo: test this!
     protected Object handleEncryptedMessage(Message msg) throws Exception {
         // decrypt the message; we need to copy msg as we modify its buffer (http://jira.jboss.com/jira/browse/JGRP-538)
         Message tmpMsg=decryptMessage(null, msg.copy()); // need to copy for possible xmits
@@ -310,11 +308,11 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
 
         // copy needed because same message (object) may be retransmitted -> prevent double encryption
         Message msgEncrypted=msg.copy(false).putHeader(this.id, hdr);
-        if(msg.getLength() > 0)
-            msgEncrypted.setBuffer(code(msg.getRawBuffer(),msg.getOffset(),msg.getLength(),false));
-        else { // length is 0
-            byte[] payload=msg.getRawBuffer();
-            if(payload != null) // we don't encrypt empty buffers (https://issues.jboss.org/browse/JGRP-2153)
+        byte[] payload=msg.getRawBuffer();
+        if(payload != null) {
+            if(msg.getLength() > 0)
+                msgEncrypted.setBuffer(code(payload, msg.getOffset(), msg.getLength(),false));
+            else // length is 0, but buffer may be "" (empty, but *not null* buffer)! [JGRP-2153]
                 msgEncrypted.setBuffer(payload, msg.getOffset(), msg.getLength());
         }
         return msgEncrypted;
