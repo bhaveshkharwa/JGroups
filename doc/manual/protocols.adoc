@@ -1950,7 +1950,7 @@ ${SERIALIZE}
 <<ASYM_ENCRYPT>> uses a built-in key exchange protocol for a requester to fetch the secret group key from the key server
 (usually the coordinator). Such secret key requests are accompanied by the requester's public key. The key server
 encrypts the secret key response with the public key of the requester, and the requester decrypts the response with its
-private key and can then install the new secret group key to encrypt and decrypt group messages.
+private key and can then install the new secret group key to encrypt and decrypt messages.
 
 This works well, however, it is not immune against man-in-the-middle attacks. If MitM attack prevention is required,
 a separate key exchange protocol can be added to the stack. ASYM_ENCRYPT needs to be told to use the key exchange
@@ -2004,6 +2004,21 @@ Here `SSL_KEY_EXCHANGE` is positioned below `ASYM_ENCRYPT`. The latter is config
 protocol (1). The former is configured with a keystore and password (2).
 
 ${SSL_KEY_EXCHANGE}
+
+====== SSL_KEY_EXCHANGE and left members
+Note that when we have members `{A,B,C}` and `change_key_on_leave` is true in ASYM_ENCRYPT, then A will install a new
+shared group key in `{A,B}` when C leaves (or crashes).
+
+This works fine as long as we _don't_ use an external key exchange mechanism (such as SSL_KEY_EXCHANGE): C will _not_ be
+able to decrypt A's or B's messages, as it doesn't have the new secret group key.
+
+However, as (for example) SSL_KEY_EXCHANGE works by connecting to the key server (the coordinator) and validating the
+identity of the key requester via a certificate chain, the left member will still be able to decrypt the traffic in
+the new cluster `{A,B}` by simply fetching and installing the new secret group key.
+
+There's no way around this as we assume that any member with a valid certificate (chain) can fetch the secret
+group key. As a matter of fact, even a rogue member having the correct certficates would be able to acquire the secret
+group key!
 
 
 [[AUTH]]
