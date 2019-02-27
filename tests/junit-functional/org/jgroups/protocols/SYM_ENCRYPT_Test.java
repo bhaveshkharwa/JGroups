@@ -2,9 +2,9 @@ package org.jgroups.protocols;
 
 import org.jgroups.Global;
 import org.jgroups.JChannel;
+import org.jgroups.protocols.pbcast.GMS;
 import org.jgroups.protocols.pbcast.NAKACK2;
-import org.jgroups.stack.ProtocolStack;
-import org.jgroups.util.Util;
+import org.jgroups.protocols.pbcast.STABLE;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -20,7 +20,7 @@ public class SYM_ENCRYPT_Test extends EncryptTest {
     protected static final String DEF_PWD="changeit";
 
     @BeforeMethod protected void init() throws Exception {
-        super.init(getClass().getSimpleName());
+        super.init();
     }
 
     @AfterMethod protected void destroy() {
@@ -77,22 +77,24 @@ public class SYM_ENCRYPT_Test extends EncryptTest {
 
 
     protected JChannel create(String name) throws Exception {
-        JChannel ch=new JChannel(Util.getTestStack()).name(name);
-        SYM_ENCRYPT encrypt;
+        SYM_ENCRYPT encr;
         try {
-            encrypt=createENCRYPT("keystore/defaultStore.keystore", DEF_PWD);
+            encr=new SYM_ENCRYPT().keystoreName("keystore/defaultStore.keystore").alias("myKey").storePassword(DEF_PWD);
         }
         catch(Throwable t) {
-            encrypt=createENCRYPT("defaultStore.keystore", DEF_PWD);
+            encr=new SYM_ENCRYPT().keystoreName("defaultStore.keystore").alias("myKey").storePassword(DEF_PWD);
         }
-        ch.getProtocolStack().insertProtocol(encrypt, ProtocolStack.Position.BELOW, NAKACK2.class);
-        return ch;
-    }
 
-    protected static SYM_ENCRYPT createENCRYPT(String keystore_name, String store_pwd) throws Exception {
-        SYM_ENCRYPT encrypt=new SYM_ENCRYPT().keystoreName(keystore_name).alias("myKey").storePassword(store_pwd);
-        encrypt.init();
-        return encrypt;
+        return new JChannel(
+          new SHARED_LOOPBACK(),
+          new SHARED_LOOPBACK_PING(),
+          // omit MERGE3 from the stack -- nodes are leaving gracefully
+          encr,
+          new NAKACK2().setUseMcastXmit(false),
+          new UNICAST3(),
+          new STABLE(),
+          new GMS().joinTimeout(2000).leaveTimeout(10000))
+          .name(name);
     }
 
 }

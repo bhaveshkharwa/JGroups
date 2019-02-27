@@ -33,7 +33,7 @@ public class LeaveTest {
     protected static final InetAddress LOOPBACK;
 
     public LeaveTest() {
-        cluster_name=getClusterName();
+        cluster_name=getClass().getSimpleName();
     }
 
     static {
@@ -47,12 +47,11 @@ public class LeaveTest {
 
     protected JChannel[] channels;
 
-    protected String getClusterName() {return LeaveTest.class.getSimpleName();}
 
     protected void setup(int num) throws Exception {
         channels=new JChannel[num];
         for(int i = 0; i < channels.length; i++)
-            channels[i] = create(String.valueOf(i + 1)).connect(getClusterName());
+            channels[i] = create(String.valueOf(i + 1)).connect(cluster_name);
         Util.waitUntilAllChannelsHaveSameView(10000, 1000, channels);
         System.out.printf("\n%s\n\n", Stream.of(channels).map(ch -> ch.getAddress() + ": " + ch.getView())
           .collect(Collectors.joining("\n")));

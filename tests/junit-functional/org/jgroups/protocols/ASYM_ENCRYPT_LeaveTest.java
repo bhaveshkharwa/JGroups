@@ -22,8 +22,6 @@ public class ASYM_ENCRYPT_LeaveTest extends LeaveTest {
     protected static final String      KEYSTORE_PWD="password";
     protected static final int         NUM_LEAVERS=2;
 
-    @Override protected String getClusterName() {return ASYM_ENCRYPT_LeaveTest.class.getSimpleName();}
-
     protected boolean useExternalKeyExchange() {return false;}
 
     public void testGracefulLeave() throws Exception {
@@ -34,7 +32,6 @@ public class ASYM_ENCRYPT_LeaveTest extends LeaveTest {
 
         JChannel[] remaining_channels=new JChannel[channels.length-NUM_LEAVERS];
         System.arraycopy(channels, NUM_LEAVERS, remaining_channels, 0, channels.length-NUM_LEAVERS);
-
         Stream.of(channels).map(c -> c.getProtocolStack().findProtocol(GMS.class)).forEach(p -> ((Protocol)p).setLevel("trace"));
         Stream.of(channels).limit(NUM_LEAVERS).forEach(Util::close);
         Util.waitUntilAllChannelsHaveSameView(30000, 1000, remaining_channels);

@@ -18,6 +18,7 @@ import org.testng.annotations.Test;
 
 import javax.crypto.SecretKey;
 import java.lang.reflect.Field;
+import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -33,17 +34,27 @@ import java.util.stream.Stream;
  */
 @Test(enabled=false)
 public abstract class EncryptTest {
-    protected JChannel            a,b,c,d,rogue;
-    protected MyReceiver<Message> ra, rb, rc, r_rogue;
-    protected String              cluster_name;
-    protected static final short  GMS_ID;
+    protected JChannel                 a,b,c,d,rogue;
+    protected MyReceiver<Message>      ra, rb, rc, r_rogue;
+    protected final String             cluster_name;
+    protected static final short       GMS_ID;
+    protected static final InetAddress LOOPBACK;
 
     static {
         GMS_ID=ClassConfigurator.getProtocolId(GMS.class);
+        try {
+            LOOPBACK = Util.getLocalhost();
+        }
+        catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
-    protected void init(String cluster_name) throws Exception {
-        this.cluster_name=cluster_name;
+    public EncryptTest() {
+        cluster_name=getClass().getSimpleName();
+    }
+
+    protected void init() throws Exception {
         a=create("A").connect(cluster_name).setReceiver(ra=new MyReceiver<>().rawMsgs(true));
         b=create("B").connect(cluster_name).setReceiver(rb=new MyReceiver<>().rawMsgs(true));
         c=create("C").connect(cluster_name).setReceiver(rc=new MyReceiver<>().rawMsgs(true));
@@ -56,7 +67,6 @@ public abstract class EncryptTest {
     @Test(enabled=false) protected void destroy() {Util.close(rogue,d,c,b,a);}
 
     protected abstract JChannel create(String name) throws Exception;
-
 
 
     /** Tests A,B or C sending messages and their reception by everyone in cluster {A,B,C} */
@@ -332,7 +342,8 @@ public abstract class EncryptTest {
     }
 
     protected static String print(List<Message> msgs) {
-        return msgs.stream().collect(ArrayList::new, (l,msg) -> l.add(msg.getObject()), (x, y) -> {}).toString();
+        return msgs.stream().map(Message::getObject).map(obj -> obj== null? "null" : obj.toString())
+          .collect(Collectors.joining(", ", "[", "]"));
     }
 
     protected static String print(byte[] buf, int offset, int length) {

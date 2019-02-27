@@ -8,11 +8,6 @@ package org.jgroups.protocols;
  * @since  4.0.12
  */
 public class ASYM_ENCRYPT_LeaveTestKeyExchange extends ASYM_ENCRYPT_LeaveTest {
-
-    @Override protected String getClusterName() {return ASYM_ENCRYPT_LeaveTestKeyExchange.class.getSimpleName();}
-
     @Override protected boolean useExternalKeyExchange() {return true;}
-
-
 
 }

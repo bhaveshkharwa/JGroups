@@ -209,65 +209,16 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
                 }
                 return Processing.SKIP;
             case GMS.GmsHeader.JOIN_RSP:
-                try {
-                    Message encr_msg=encrypt(msg); // already a copy
-                    if(use_external_key_exchange) {
-                        // attach a FETCH_SHARED_KEY to the JOIN_RSP; this causes the joiner to fetch and install the
-                        // shared key *before* delivering the JOIN_RSP (so it can decrypt it)
-                        log.trace("%s: asking %s to fetch the shared group key %s via an external key exchange protocol",
-                                  local_addr, msg.getDest(), Util.byteArrayToHexString(sym_version));
-                        Address srv=key_exchange.getServerLocation();
-                        encr_msg.putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion()).server(srv));
-                    }
-                    else {
-                        encr_msg=addKeysToMessage(encr_msg, false, true, false, msg.getDest());
-                        log.debug("%s: sending encrypted group key to %s (version: %s)",
-                                  local_addr, encr_msg.getDest(), Util.byteArrayToHexString(sym_version));
-                    }
-                    down_prot.down(encr_msg);
-                    return Processing.DROP;
-                }
-                catch(Exception ex) {
-                    log.warn("%s: unable to send message down", local_addr, getUseExternalKeyExchange());
-                }
-                break;
+                return addMetadata(msg, true, false, msg.getDest());
             case GMS.GmsHeader.VIEW:
-                try {
-                    Message encr_msg=encrypt(msg); // already a copy
-                    if(use_external_key_exchange) {
-                        // ask mbrs to fetch and install the new group key *before* delivering the view (so they can decrypt it)
-                        Address srv=key_exchange.getServerLocation();
-                        encr_msg.putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion()).server(srv));
-                    }
-                    else
-                        encr_msg=addKeysToMessage(encr_msg, false, true, send_group_keys, null);
-                    send_group_keys=false;
-                    down_prot.down(encr_msg);
-                    return Processing.DROP; // the encrypted msg was already sent; no need to send the un-encrypted msg
-                }
-                catch(Exception e) {
-                    log.warn("%s: unable to send message down: %s", local_addr, e.getMessage());
-                }
-                break;
+                boolean tmp=send_group_keys;
+                send_group_keys=false;
+                return addMetadata(msg, true, tmp, null);
             case GMS.GmsHeader.INSTALL_MERGE_VIEW:
                 // a new group key was created in down(INSTALL_MERGE_VIEW)
                 if(Objects.equals(local_addr, msg.dest()))
                     break;
-                try {
-                    Message encr_msg=encrypt(msg); // already a copy
-                    if(use_external_key_exchange) {
-                        Address srv=key_exchange.getServerLocation();
-                        encr_msg.putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion()).server(srv));
-                    }
-                    else
-                        encr_msg=addKeysToMessage(encr_msg, false, true, true, null);
-                    down_prot.down(encr_msg);
-                    return Processing.DROP;
-                }
-                catch(Exception e) {
-                    log.warn("%s: unable to send message down: %s", local_addr, e.getMessage());
-                }
-                break;
+                return addMetadata(msg, true, true, null);
             case GMS.GmsHeader.MERGE_RSP:
                 if(!use_external_key_exchange) {
                     Message copy=addKeysToMessage(msg, true, true, false, null);
@@ -349,6 +300,35 @@ public class ASYM_ENCRYPT extends Encrypt<KeyStore.PrivateKeyEntry> {
         }
         catch(Exception ex) {
             log.error("%s: failed reading public keys received from %s: %s", local_addr, sender, ex);
+        }
+    }
+
+
+    protected Processing addMetadata(Message msg, boolean add_public_keys, boolean add_group_key,
+                                     Address include_group_key_only_for) {
+        try {
+            Message encr_msg=encrypt(msg); // already a copy
+            if(use_external_key_exchange) {
+                // attach a FETCH_SHARED_KEY to the message; this causes the joiner to fetch and install the
+                // shared key *before* delivering the message (so it can be decrypted)
+                if(log.isTraceEnabled() && msg.dest() != null)
+                    log.trace("%s: asking %s to fetch the shared group key %s via an external key exchange protocol",
+                              local_addr, msg.getDest(), Util.byteArrayToHexString(sym_version));
+                Address srv=key_exchange.getServerLocation();
+                encr_msg.putHeader(id, new EncryptHeader(EncryptHeader.FETCH_SHARED_KEY, symVersion()).server(srv));
+            }
+            else {
+                encr_msg=addKeysToMessage(encr_msg, false, add_public_keys, add_group_key, include_group_key_only_for);
+                log.debug("%s: sending encrypted group key to %s (version: %s)", local_addr,
+                          encr_msg.getDest() == null? "all members" : encr_msg.getDest(),
+                          Util.byteArrayToHexString(sym_version));
+            }
+            down_prot.down(encr_msg);
+            return Processing.DROP; // the encrypted msg was already sent; no need to send the un-encrypted msg
+        }
+        catch(Exception ex) {
+            log.warn("%s: unable to send message down: %s", local_addr, ex.getMessage());
+            return Processing.PROCESS;
         }
     }
 

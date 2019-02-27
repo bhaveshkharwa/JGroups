@@ -1934,6 +1934,8 @@ The configuration snippet shows ASYM_ENCRYPT positioned just below NAKACK2, so t
 retransmission protocols NAKACK2 and UNICAST3 are encrypted, too. Note that AUTH should be part of the configuration, or
 else unauthenticated nodes would be able to acquire the secret key from the coordinator.
 
+For details on the design of ASYM_ENCRYPT see https://github.com/belaban/JGroups/blob/master/doc/design/ASYM_ENCRYPT.txt.
+
 ${ASYM_ENCRYPT}
 
 

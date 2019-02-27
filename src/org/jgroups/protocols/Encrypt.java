@@ -265,6 +265,8 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
     /** Does the actual work for decrypting - if version does not match current cipher then tries the previous cipher */
     protected Message decryptMessage(Cipher cipher, Message msg) throws Exception {
         EncryptHeader hdr=msg.getHeader(this.id);
+        // If the versions of the group keys don't match, we only try to use a previous version if the sender is in
+        // the current view
         if(!Arrays.equals(hdr.version(), sym_version)) {
             if(!inView(msg.src(),
                        String.format("%s: rejected decryption of %s message from non-member %s",
